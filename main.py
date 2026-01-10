@@ -43,6 +43,9 @@ class ImageViewerApp:
         # 监听窗口大小变化
         page.on_resized = self.on_window_resize
         
+        # 监听键盘事件
+        page.on_keyboard_event = self.on_keyboard_event
+        
     def create_ui(self):
         """创建UI界面"""
         # 左侧文件夹树
@@ -140,34 +143,77 @@ class ImageViewerApp:
             fit=ft.ImageFit.CONTAIN if hasattr(ft, 'ImageFit') else ft.BoxFit.CONTAIN,
         )
         
+        # 位置指示器
+        self.position_indicator = ft.Container(
+            content=ft.Text(
+                "1 / 1",
+                size=16,
+                color="white",
+                weight=ft.FontWeight.W_500,
+            ),
+            bgcolor="#00000080",
+            padding=ft.Padding(left=20, right=20, top=10, bottom=10),
+            border_radius=20,
+            alignment=ft.Alignment(0, 0),
+        )
+        
         self.preview_dialog = ft.AlertDialog(
             modal=True,
             content=ft.Container(
-                content=ft.Stack([
-                    self.preview_image,
-                    ft.Row([
-                        ft.IconButton(
-                            icon=ft.icons.Icons.ARROW_BACK_IOS,
-                            icon_color="white",
-                            bgcolor="#00000080",
-                            on_click=self.show_previous_image,
-                        ),
-                        ft.Container(expand=True),
-                        ft.IconButton(
-                            icon=ft.icons.Icons.ARROW_FORWARD_IOS,
-                            icon_color="white",
-                            bgcolor="#00000080",
-                            on_click=self.show_next_image,
-                        ),
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ]),
+                content=ft.Column([
+                    # 顶部区域：关闭按钮
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Container(expand=True),
+                            ft.IconButton(
+                                icon=ft.icons.Icons.CLOSE,
+                                icon_color="white",
+                                bgcolor="#00000080",
+                                on_click=self.close_preview,
+                                tooltip="关闭 (ESC)",
+                            ),
+                        ]),
+                        height=50,
+                    ),
+                    # 中间区域：左按钮 + 图片 + 右按钮
+                    ft.Container(
+                        content=ft.Row([
+                            # 左侧按钮
+                            ft.IconButton(
+                                icon=ft.icons.Icons.CHEVRON_LEFT,
+                                icon_color="white",
+                                bgcolor="#00000080",
+                                on_click=self.show_previous_image,
+                                icon_size=40,
+                            ),
+                            # 图片容器
+                            ft.Container(
+                                content=self.preview_image,
+                                expand=True,
+                                alignment=ft.Alignment(0, 0),
+                            ),
+                            # 右侧按钮
+                            ft.IconButton(
+                                icon=ft.icons.Icons.CHEVRON_RIGHT,
+                                icon_color="white",
+                                bgcolor="#00000080",
+                                on_click=self.show_next_image,
+                                icon_size=40,
+                            ),
+                        ], alignment=ft.MainAxisAlignment.CENTER, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        expand=True,
+                    ),
+                    # 底部区域：位置指示器
+                    ft.Container(
+                        content=self.position_indicator,
+                        alignment=ft.Alignment(0, 0),
+                        height=50,
+                    ),
+                ], spacing=0),
                 width=1000,
                 height=700,
+                bgcolor="#000000E0",  # 半透明黑色背景
             ),
-            actions=[
-                ft.TextButton("关闭", on_click=self.close_preview),
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
         )
         
         self.page.overlay.append(self.preview_dialog)
@@ -422,6 +468,10 @@ class ImageViewerApp:
                 
                 # Flet 0.80+ 需要 data URI 格式
                 self.preview_image.src = f"data:image/png;base64,{img_base64}"
+                
+                # 更新位置指示器
+                self.position_indicator.content.value = f"{self.current_image_index + 1} / {len(self.images)}"
+                
                 self.preview_dialog.open = True
                 self.page.update()
             except Exception as e:
@@ -434,21 +484,32 @@ class ImageViewerApp:
                 self.page.update()
     
     def show_previous_image(self, e):
-        """显示上一张图片"""
-        if self.current_image_index > 0:
-            self.current_image_index -= 1
+        """显示上一张图片（支持循环）"""
+        if len(self.images) > 0:
+            self.current_image_index = (self.current_image_index - 1) % len(self.images)
             self.show_preview()
     
     def show_next_image(self, e):
-        """显示下一张图片"""
-        if self.current_image_index < len(self.images) - 1:
-            self.current_image_index += 1
+        """显示下一张图片（支持循环）"""
+        if len(self.images) > 0:
+            self.current_image_index = (self.current_image_index + 1) % len(self.images)
             self.show_preview()
     
     def close_preview(self, e):
         """关闭预览"""
         self.preview_dialog.open = False
         self.page.update()
+    
+    def on_keyboard_event(self, e: ft.KeyboardEvent):
+        """处理键盘事件"""
+        # 只在预览对话框打开时处理键盘事件
+        if self.preview_dialog.open:
+            if e.key == "Arrow Left":
+                self.show_previous_image(None)
+            elif e.key == "Arrow Right":
+                self.show_next_image(None)
+            elif e.key == "Escape":
+                self.close_preview(None)
     
     def on_window_resize(self, e):
         """窗口大小变化时重新布局"""
@@ -499,7 +560,7 @@ class ImageViewerApp:
 
 def main():
     app = ImageViewerApp()
-    ft.app(target=app.main)
+    ft.run(app.main)
 
 
 if __name__ == "__main__":
