@@ -1,0 +1,13 @@
+[project]
+name = "view-pic"
+version = "0.1.0"
+description = "A modern image viewer for macOS built with Flet"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flet>=0.24.0",
+    "pillow>=10.0.0",
+]
+
+[tool.uv]
+package = false
