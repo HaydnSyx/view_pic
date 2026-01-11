@@ -157,6 +157,13 @@ class ImageViewerApp:
             alignment=ft.Alignment(0, 0),
         )
         
+        # 底部缩略图列表
+        self.thumbnail_row = ft.Row(
+            scroll=ft.ScrollMode.HIDDEN,  # 隐藏滚动条
+            spacing=10,
+            alignment=ft.MainAxisAlignment.CENTER,
+        )
+        
         self.preview_dialog = ft.AlertDialog(
             modal=True,
             content=ft.Container(
@@ -203,15 +210,25 @@ class ImageViewerApp:
                         ], alignment=ft.MainAxisAlignment.CENTER, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                         expand=True,
                     ),
-                    # 底部区域：位置指示器
+                    # 位置指示器
                     ft.Container(
                         content=self.position_indicator,
                         alignment=ft.Alignment(0, 0),
-                        height=50,
+                        height=40,
+                    ),
+                    # 底部缩略图轮播条
+                    ft.Container(
+                        content=ft.Container(
+                            content=self.thumbnail_row,
+                            alignment=ft.Alignment(0, 0),  # 居中对齐
+                        ),
+                        height=100,
+                        bgcolor="#00000060",
+                        padding=10,
                     ),
                 ], spacing=0),
                 width=1000,
-                height=700,
+                height=800,  # 增加高度以容纳缩略图
                 bgcolor="#000000E0",  # 半透明黑色背景
             ),
         )
@@ -472,6 +489,9 @@ class ImageViewerApp:
                 # 更新位置指示器
                 self.position_indicator.content.value = f"{self.current_image_index + 1} / {len(self.images)}"
                 
+                # 更新底部缩略图轮播
+                self.update_thumbnail_carousel()
+                
                 self.preview_dialog.open = True
                 self.page.update()
             except Exception as e:
@@ -482,6 +502,62 @@ class ImageViewerApp:
                 )
                 self.page.snack_bar.open = True
                 self.page.update()
+    
+    def update_thumbnail_carousel(self):
+        """更新底部缩略图轮播"""
+        self.thumbnail_row.controls.clear()
+        
+        # 计算显示范围：当前图片左右3张，右右3张，总共7张
+        total_images = len(self.images)
+        visible_count = 7
+        
+        if total_images <= visible_count:
+            # 如果图片总数小于7张，全部显示
+            start_idx = 0
+            end_idx = total_images
+        else:
+            # 计算居中显示的范围
+            half_visible = visible_count // 2  # 3
+            start_idx = max(0, self.current_image_index - half_visible)
+            end_idx = min(total_images, start_idx + visible_count)
+            
+            # 边界调整
+            if end_idx == total_images:
+                start_idx = max(0, total_images - visible_count)
+        
+        # 生成缩略图
+        for idx in range(start_idx, end_idx):
+            image_path = self.images[idx]
+            thumbnail = self.create_thumbnail(image_path, 80)  # 缩略图尺寸为80x80
+            
+            if thumbnail:
+                # 当前图片有高亮边框
+                is_current = (idx == self.current_image_index)
+                border = ft.Border(
+                    left=ft.BorderSide(3, "#1976D2" if is_current else "transparent"),
+                    right=ft.BorderSide(3, "#1976D2" if is_current else "transparent"),
+                    top=ft.BorderSide(3, "#1976D2" if is_current else "transparent"),
+                    bottom=ft.BorderSide(3, "#1976D2" if is_current else "transparent"),
+                )
+                
+                thumb_container = ft.Container(
+                    content=ft.Image(
+                        src=thumbnail,
+                        width=80,
+                        height=80,
+                        fit=ft.BoxFit.COVER if hasattr(ft, 'BoxFit') else "cover",
+                    ),
+                    border=border,
+                    border_radius=5,
+                    on_click=lambda e, i=idx: self.jump_to_image(i),
+                    ink=True,
+                )
+                self.thumbnail_row.controls.append(thumb_container)
+    
+    def jump_to_image(self, index: int):
+        """跳转到指定图片"""
+        self.current_image_index = index
+        self.show_preview()
     
     def show_previous_image(self, e):
         """显示上一张图片（支持循环）"""
