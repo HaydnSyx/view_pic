@@ -39,6 +39,11 @@ def show_preview(
         # 更新底部缩略图轮播
         update_thumbnail_carousel(images, current_index, thumbnail_row, on_thumbnail_click)
 
+        # 将预览对话框内容区域拉伸到当前窗口大小，实现“全屏”预览效果
+        if isinstance(preview_dialog.content, ft.Container):
+            preview_dialog.content.width = page.window.width
+            preview_dialog.content.height = page.window.height
+
         preview_dialog.open = True
         page.update()
     except Exception as exc:  # 保底异常处理

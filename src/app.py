@@ -53,6 +53,13 @@ class ImageViewerApp:
         page.window.min_width = settings.WINDOW_MIN_WIDTH
         page.window.min_height = settings.WINDOW_MIN_HEIGHT
 
+        # 启动时将窗口最大化（非系统级全屏）
+        try:
+            if hasattr(page.window, "maximized"):
+                page.window.maximized = True
+        except Exception as exc:
+            logger.error("设置窗口最大化失败: {}", exc)
+
         self.page = page
 
         logger.info("Initializing ImageViewerApp UI")
