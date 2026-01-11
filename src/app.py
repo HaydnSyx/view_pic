@@ -3,7 +3,7 @@
 import threading
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Set
 
 import flet as ft
 
@@ -24,6 +24,9 @@ class ImageViewerApp:
         self.volumes_path: Path = settings.VOLUMES_PATH
         self.home_path: Path = settings.HOME_PATH
         self.monitoring_devices: bool = False
+        
+        # 文件夹树状态
+        self.expanded_folders: Set[Path] = set()  # 存储展开的文件夹路径
 
         # 运行时属性（初始化为 None，create_ui 中赋值）
         self.page: ft.Page | None = None
@@ -39,7 +42,7 @@ class ImageViewerApp:
 
     def main(self, page: ft.Page) -> None:
         """Flet 应用入口函数"""
-        page.title = "View Pic - 图片查看器"
+        page.title = "图片查看器"
         page.theme_mode = ft.ThemeMode.LIGHT
         page.padding = 0
         page.spacing = 0
@@ -81,16 +84,6 @@ class ImageViewerApp:
         left_panel = ft.Container(
             content=ft.Column(
                 [
-                    ft.Container(
-                        content=ft.Text(
-                            "文件夹",
-                            size=16,
-                            weight=ft.FontWeight.BOLD,
-                            color="#1976D2",
-                        ),
-                        padding=15,
-                        bgcolor="#E3F2FD",
-                    ),
                     ft.Container(
                         content=self.folder_tree,
                         expand=True,
@@ -271,12 +264,12 @@ class ImageViewerApp:
     # === 文件夹与设备 ===
 
     def build_folder_tree(self) -> None:
-        """构建文件夹树"""
+        """构建文件夹树（混合策略：一级扁平+二级树形）"""
         assert self.folder_tree is not None
 
         self.folder_tree.controls.clear()
 
-        # 常用文件夹
+        # 常用文件夹（第一级）
         common_folders = [
             ("桌面", self.home_path / "Desktop", ft.icons.Icons.FOLDER_OUTLINED),
             ("文档", self.home_path / "Documents", ft.icons.Icons.DESCRIPTION),
@@ -293,13 +286,19 @@ class ImageViewerApp:
             )
         )
 
+        # 渲染常用文件夹（第一级扁平，但可展开为树形）
         for name, path, icon in common_folders:
             if path.exists():
-                self.folder_tree.controls.append(
-                    self.create_folder_item(name, str(path), icon)
+                # 使用递归渲染，支持展开子文件夹
+                folder_controls = self.render_folder_with_children(
+                    folder_path=path,
+                    name=name,
+                    icon=icon,
+                    level=0  # 第一级
                 )
+                self.folder_tree.controls.extend(folder_controls)
 
-        # 移动设备
+        # 移动设备（第一级）
         self.folder_tree.controls.append(ft.Container(height=10))
         self.folder_tree.controls.append(
             ft.Container(
@@ -317,27 +316,85 @@ class ImageViewerApp:
         if self.page is not None:
             self.page.update()
 
-    def create_folder_item(self, name: str, path: str, icon) -> ft.Container:
-        """创建文件夹项"""
+    def create_folder_item(
+        self, 
+        name: str, 
+        path: str, 
+        icon, 
+        level: int = 0, 
+        folder_path: Path | None = None
+    ) -> ft.Container:
+        """创建文件夹项
+        
+        Args:
+            name: 文件夹显示名称
+            path: 文件夹路径字符串
+            icon: 文件夹图标
+            level: 层级（用于缩进），0表示第一级
+            folder_path: 文件夹 Path 对象（用于展开/收起）
+        """
+        folder_path_obj = Path(path) if folder_path is None else folder_path
+        
+        # 检查是否有子文件夹
+        has_children = self.has_subfolders(folder_path_obj) if level >= 0 else False
+        is_expanded = self.is_folder_expanded(folder_path_obj)
+        
+        # 展开/收起箭头（仅在有子文件夹时显示）
+        expand_button = ft.IconButton(
+            icon=ft.icons.Icons.ARROW_DROP_DOWN if is_expanded else ft.icons.Icons.CHEVRON_RIGHT,
+            icon_size=16,
+            icon_color="#666666",
+            on_click=lambda e: self.toggle_folder_expand(folder_path_obj),
+            visible=has_children,
+            padding=0,
+            width=20,
+            height=20,
+        )
+        
+        # 构建文件夹项内容
+        row_controls = []
+        
+        # 层级缩进（第二级及以下）
+        if level > 0:
+            row_controls.append(ft.Container(width=24 * level))
+        
+        # 所有级别都显示箭头
+        row_controls.append(expand_button)
+        
+        row_controls.extend([
+            ft.Icon(icon, size=20, color="#1976D2"),
+            ft.Text(name, size=14, color="#333333"),
+        ])
+        
+        # 检查是否为当前选中的文件夹
+        is_selected = self.current_folder == folder_path_obj
+        
         return ft.Container(
             content=ft.Row(
-                [
-                    ft.Icon(icon, size=20, color="#1976D2"),
-                    ft.Text(name, size=14, color="#333333"),
-                ],
-                spacing=10,
+                row_controls,
+                spacing=5,
             ),
             padding=10,
             border_radius=8,
             ink=True,
             on_click=lambda e: self.load_folder(path),
-            bgcolor="transparent",
+            bgcolor="#E3F2FD" if is_selected else "transparent",
             on_hover=self.on_folder_hover,
+            data=path,  # 存储路径以便后续使用
         )
 
     def on_folder_hover(self, e: ft.HoverEvent) -> None:
         """文件夹悬停效果"""
-        e.control.bgcolor = "#E3F2FD" if e.data == "true" else "transparent"
+        # 检查是否为当前选中的文件夹
+        folder_path = Path(e.control.data) if e.control.data else None
+        is_selected = folder_path and self.current_folder == folder_path
+        
+        if e.data == "true":
+            # 悬停时：如果已选中则保持选中色，否则显示悬停色
+            e.control.bgcolor = "#E3F2FD" if is_selected else "#F5F5F5"
+        else:
+            # 离开时：如果已选中则保持选中色，否则透明
+            e.control.bgcolor = "#E3F2FD" if is_selected else "transparent"
         e.control.update()
 
     def load_folder(self, folder_path: str) -> None:
@@ -350,6 +407,8 @@ class ImageViewerApp:
                 self.current_folder, self.supported_formats
             )
             self.display_images()
+            # 刷新文件夹树以更新选中状态
+            self.build_folder_tree()
         except Exception as exc:  # 保底异常处理
             print(f"加载文件夹失败: {exc}")
             self.page.snack_bar = ft.SnackBar(
@@ -369,13 +428,14 @@ class ImageViewerApp:
             devices = device_service.get_connected_devices(self.volumes_path)
             if devices:
                 for device in devices:
-                    self.device_list.controls.append(
-                        self.create_folder_item(
-                            device.name,
-                            str(device),
-                            ft.icons.Icons.USB,
-                        )
+                    # 使用递归渲染，支持展开子文件夹
+                    device_controls = self.render_folder_with_children(
+                        folder_path=device,
+                        name=device.name,
+                        icon=ft.icons.Icons.USB,
+                        level=0  # 第一级
                     )
+                    self.device_list.controls.extend(device_controls)
             else:
                 self.device_list.controls.append(
                     ft.Container(
@@ -390,6 +450,83 @@ class ImageViewerApp:
 
         if self.page is not None:
             self.page.update()
+
+    def get_subfolders(self, parent_path: Path) -> List[Path]:
+        """获取子文件夹列表"""
+        try:
+            subfolders = [
+                item for item in parent_path.iterdir()
+                if item.is_dir() 
+                and not item.name.startswith('.')  # 过滤隐藏文件夹
+                and not item.name.startswith('$')  # 过滤系统文件夹如 $RECYCLE.BIN
+            ]
+            return sorted(subfolders, key=lambda x: x.name.lower())
+        except (PermissionError, OSError) as exc:
+            print(f"无法访问文件夹 {parent_path}: {exc}")
+            return []
+
+    def has_subfolders(self, folder_path: Path) -> bool:
+        """检查文件夹是否包含子文件夹（总是返回 True 以显示箭头）"""
+        # 始终返回 True，让所有文件夹都显示箭头
+        return True
+
+    def is_folder_expanded(self, folder_path: Path) -> bool:
+        """检查文件夹是否已展开"""
+        return folder_path in self.expanded_folders
+
+    def toggle_folder_expand(self, folder_path: Path) -> None:
+        """切换文件夹展开状态"""
+        if folder_path in self.expanded_folders:
+            self.expanded_folders.remove(folder_path)
+        else:
+            self.expanded_folders.add(folder_path)
+        self.build_folder_tree()
+
+    def render_folder_with_children(
+        self,
+        folder_path: Path,
+        name: str,
+        icon,
+        level: int = 0
+    ) -> List[ft.Control]:
+        """递归渲染文件夹及其子文件夹
+        
+        Args:
+            folder_path: 文件夹路径
+            name: 显示名称
+            icon: 图标
+            level: 当前层级（0表示第一级）
+            
+        Returns:
+            包含文件夹项及其子文件夹的控件列表
+        """
+        controls = []
+        
+        # 添加当前文件夹项
+        controls.append(
+            self.create_folder_item(
+                name=name,
+                path=str(folder_path),
+                icon=icon,
+                level=level,
+                folder_path=folder_path
+            )
+        )
+        
+        # 如果展开，递归渲染子文件夹
+        if self.is_folder_expanded(folder_path):
+            subfolders = self.get_subfolders(folder_path)
+            for subfolder in subfolders:
+                controls.extend(
+                    self.render_folder_with_children(
+                        folder_path=subfolder,
+                        name=subfolder.name,
+                        icon=ft.icons.Icons.FOLDER_OUTLINED,
+                        level=level + 1
+                    )
+                )
+        
+        return controls
 
     def start_device_monitoring(self) -> None:
         """启动设备监听"""
