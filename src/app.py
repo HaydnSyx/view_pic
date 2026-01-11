@@ -26,8 +26,9 @@ class ImageViewerApp:
         self.volumes_path: Path = settings.VOLUMES_PATH
         self.home_path: Path = settings.HOME_PATH
         self.monitoring_devices: bool = False
-        
-        # 文件夹树状态
+
+        # 预览相关状态
+        self.zoom_level: float = 1.0
         self.expanded_folders: Set[Path] = set()  # 存储展开的文件夹路径
 
         # 运行时属性（初始化为 None，create_ui 中赋值）
@@ -271,6 +272,19 @@ class ImageViewerApp:
 
         self.page.overlay.append(self.preview_dialog)
         self.page.add(main_content)
+
+    def apply_zoom(self) -> None:
+        """根据当前 zoom_level 调整预览图片大小。"""
+        if self.preview_image is None or self.page is None:
+            return
+
+        base_width = self.page.window.width * 0.8
+        base_height = self.page.window.height * 0.8
+
+        self.preview_image.width = base_width * self.zoom_level
+        self.preview_image.height = base_height * self.zoom_level
+
+        self.page.update()
 
     # === 文件夹与设备 ===
 
@@ -597,6 +611,9 @@ class ImageViewerApp:
             on_thumbnail_click=lambda i: self.jump_to_image(i),
         )
 
+        # 应用当前缩放级别
+        self.apply_zoom()
+
     def update_thumbnail_carousel(self) -> None:
         """更新底部缩略图轮播（委托给 core.preview）。"""
         assert self.thumbnail_row is not None
@@ -636,16 +653,35 @@ class ImageViewerApp:
     # === 事件处理 ===
 
     def on_keyboard_event(self, e: ft.KeyboardEvent) -> None:
-        """处理键盘事件（委托给 core.preview）。"""
+        """处理键盘事件（委托给 core.preview + 本地缩放快捷键）。"""
         assert self.preview_dialog is not None
 
-        preview.handle_keyboard_event(
-            key=e.key,
-            preview_open=self.preview_dialog.open,
-            show_previous=lambda: self.show_previous_image(None),
-            show_next=lambda: self.show_next_image(None),
-            close=lambda: self.close_preview(None),
-        )
+        # 仅在预览模式下处理导航和缩放快捷键
+        if self.preview_dialog.open:
+            # 缩放快捷键：+ / - / 0
+            if e.key in {"+", "="}:
+                self.zoom_level = min(self.zoom_level + 0.1, 3.0)
+                self.apply_zoom()
+                return
+            elif e.key in {"-", "_"}:
+                self.zoom_level = max(self.zoom_level - 0.1, 0.5)
+                self.apply_zoom()
+                return
+            elif e.key in {"0", ")"}:
+                self.zoom_level = 1.0
+                self.apply_zoom()
+                return
+
+            # 其他导航相关按键交给 core.preview 处理
+            preview.handle_keyboard_event(
+                key=e.key,
+                preview_open=self.preview_dialog.open,
+                show_previous=lambda: self.show_previous_image(None),
+                show_next=lambda: self.show_next_image(None),
+                close=lambda: self.close_preview(None),
+                show_first=lambda: self.jump_to_image(0),
+                show_last=lambda: self.jump_to_image(len(self.images) - 1) if self.images else None,
+            )
 
     def on_window_resize(self, e: ft.ControlEvent) -> None:
         """窗口大小变化时重新布局"""

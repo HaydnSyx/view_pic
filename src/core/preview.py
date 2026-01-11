@@ -8,7 +8,44 @@ from typing import Callable, List
 import flet as ft
 from loguru import logger
 
+from collections import OrderedDict
+
 from src.services import image_service
+
+# 预览图片 data URI 简单缓存，提升大图和相邻图片加载性能
+_PREVIEW_CACHE: "OrderedDict[Path, str]" = OrderedDict()
+_MAX_CACHE_SIZE: int = 10
+
+
+def _get_image_data_uri(image_path: Path) -> str:
+    """获取图片 data URI，带内存缓存。"""
+
+    if image_path in _PREVIEW_CACHE:
+        # LRU：命中时移动到队尾
+        _PREVIEW_CACHE.move_to_end(image_path)
+        return _PREVIEW_CACHE[image_path]
+
+    data_uri = image_service.load_image_data_uri(image_path)
+
+    _PREVIEW_CACHE[image_path] = data_uri
+    if len(_PREVIEW_CACHE) > _MAX_CACHE_SIZE:
+        # 移除最早使用的条目
+        _PREVIEW_CACHE.popitem(last=False)
+
+    return data_uri
+
+
+def _preload_neighbor_images(images: List[Path], current_index: int) -> None:
+    """预加载当前图片的相邻图片，提升切换速度。"""
+
+    for offset in (-1, 1):
+        idx = current_index + offset
+        if 0 <= idx < len(images):
+            path = images[idx]
+            try:
+                _get_image_data_uri(path)
+            except Exception as exc:  # 保底处理，不打断预览
+                logger.error("预加载相邻图片失败: {}，错误: {}", path, exc)
 
 
 def show_preview(
@@ -29,12 +66,15 @@ def show_preview(
     image_path = images[current_index]
 
     try:
-        # 加载图片并转换为 data URI
-        preview_image.src = image_service.load_image_data_uri(image_path)
+        # 当前图片：优先从缓存获取
+        preview_image.src = _get_image_data_uri(image_path)
 
         # 更新位置指示器
         assert isinstance(position_indicator.content, ft.Text)
         position_indicator.content.value = f"{current_index + 1} / {len(images)}"
+
+        # 预加载相邻图片
+        _preload_neighbor_images(images, current_index)
 
         # 更新底部缩略图轮播
         update_thumbnail_carousel(images, current_index, thumbnail_row, on_thumbnail_click)
@@ -117,6 +157,8 @@ def handle_keyboard_event(
     show_previous: Callable[[], None],
     show_next: Callable[[], None],
     close: Callable[[], None],
+    show_first: Callable[[], None],
+    show_last: Callable[[], None],
 ) -> None:
     """处理预览相关的键盘事件。"""
 
@@ -129,3 +171,10 @@ def handle_keyboard_event(
         show_next()
     elif key == "Escape":
         close()
+    elif key == "Home":
+        show_first()
+    elif key == "End":
+        show_last()
+    elif key == "Space":
+        # 空格键等价于下一张
+        show_next()
