@@ -354,7 +354,7 @@ class ImageViewerApp:
             print(f"加载文件夹失败: {exc}")
             self.page.snack_bar = ft.SnackBar(
                 content=ft.Text(f"无法加载文件夹: {exc}"),
-                bgcolor=ft.colors.RED_400,
+                bgcolor=ft.Colors.RED_400,
             )
             self.page.snack_bar.open = True
             self.page.update()
@@ -436,7 +436,7 @@ class ImageViewerApp:
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=10,
                     ),
-                    alignment=ft.alignment.center,
+                    alignment=ft.Alignment(0, 0),
                     expand=True,
                 )
             )
@@ -616,7 +616,7 @@ class ImageViewerApp:
                 print(f"预览图片失败: {exc}")
                 self.page.snack_bar = ft.SnackBar(
                     content=ft.Text(f"无法预览图片: {exc}"),
-                    bgcolor=ft.colors.RED_400,
+                    bgcolor=ft.Colors.RED_400,
                 )
                 self.page.snack_bar.open = True
                 self.page.update()

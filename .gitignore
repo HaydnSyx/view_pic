@@ -1,5 +1,11 @@
 .idea/
 .venv/
 
+src/__pycache__/
+src/config/__pycache__/
+src/core/__pycache__/
+src/services/__pycache__/
+src/utils/__pycache__/
+
 uv.lock
 .python-version
