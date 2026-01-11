@@ -1,5 +1,8 @@
 .idea/
 .venv/
+.qoder/
+
+logs/
 
 src/__pycache__/
 src/config/__pycache__/

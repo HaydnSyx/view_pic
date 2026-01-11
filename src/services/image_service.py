@@ -6,6 +6,7 @@ from typing import List, Optional
 import base64
 import io
 
+from loguru import logger
 from PIL import Image
 
 
@@ -34,7 +35,7 @@ def create_thumbnail_data_uri(image_path: Path, size: int = 150) -> Optional[str
         img.thumbnail((size, size), Image.Resampling.LANCZOS)
         return _encode_image_to_data_uri(img)
     except Exception as exc:  # 保底异常处理
-        print(f"生成缩略图失败: {exc}")
+        logger.exception("生成缩略图失败: {}", image_path)
         return None
 
 

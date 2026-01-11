@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import List, Set
 
 import flet as ft
+from loguru import logger
 
 from src.config import settings
+from src.core import file_browser, image_gallery, preview
 from src.services import device_service, image_service
 
 
@@ -52,6 +54,8 @@ class ImageViewerApp:
         page.window.min_height = settings.WINDOW_MIN_HEIGHT
 
         self.page = page
+
+        logger.info("Initializing ImageViewerApp UI")
 
         # 创建UI组件
         self.create_ui()
@@ -264,54 +268,25 @@ class ImageViewerApp:
     # === 文件夹与设备 ===
 
     def build_folder_tree(self) -> None:
-        """构建文件夹树（混合策略：一级扁平+二级树形）"""
+        """构建文件夹树（委托给 core.file_browser）。"""
         assert self.folder_tree is not None
 
+        context = file_browser.FolderTreeContext(
+            home_path=self.home_path,
+            volumes_path=self.volumes_path,
+            current_folder=self.current_folder,
+            expanded_folders=self.expanded_folders,
+        )
+        callbacks = file_browser.FolderTreeCallbacks(
+            on_folder_selected=lambda p: self.load_folder(str(p)),
+            on_toggle_expand=self.toggle_folder_expand,
+        )
+
+        controls, device_list = file_browser.build_folder_tree(context, callbacks)
+
         self.folder_tree.controls.clear()
-
-        # 常用文件夹（第一级）
-        common_folders = [
-            ("桌面", self.home_path / "Desktop", ft.icons.Icons.FOLDER_OUTLINED),
-            ("文档", self.home_path / "Documents", ft.icons.Icons.DESCRIPTION),
-            ("图片", self.home_path / "Pictures", ft.icons.Icons.IMAGE),
-            ("下载", self.home_path / "Downloads", ft.icons.Icons.DOWNLOAD),
-        ]
-
-        self.folder_tree.controls.append(
-            ft.Container(
-                content=ft.Text(
-                    "常用位置", size=12, color="#666666", weight=ft.FontWeight.BOLD
-                ),
-                padding=10,
-            )
-        )
-
-        # 渲染常用文件夹（第一级扁平，但可展开为树形）
-        for name, path, icon in common_folders:
-            if path.exists():
-                # 使用递归渲染，支持展开子文件夹
-                folder_controls = self.render_folder_with_children(
-                    folder_path=path,
-                    name=name,
-                    icon=icon,
-                    level=0  # 第一级
-                )
-                self.folder_tree.controls.extend(folder_controls)
-
-        # 移动设备（第一级）
-        self.folder_tree.controls.append(ft.Container(height=10))
-        self.folder_tree.controls.append(
-            ft.Container(
-                content=ft.Text(
-                    "移动设备", size=12, color="#666666", weight=ft.FontWeight.BOLD
-                ),
-                padding=10,
-            )
-        )
-
-        self.device_list = ft.Column(spacing=5)
-        self.folder_tree.controls.append(self.device_list)
-        self.update_device_list()
+        self.folder_tree.controls.extend(controls)
+        self.device_list = device_list
 
         if self.page is not None:
             self.page.update()
@@ -403,14 +378,20 @@ class ImageViewerApp:
 
         self.current_folder = Path(folder_path)
         try:
+            logger.info("Loading folder: {}", self.current_folder)
             self.images = image_service.list_images_in_folder(
                 self.current_folder, self.supported_formats
+            )
+            logger.info(
+                "Loaded folder: {} with {} images",
+                self.current_folder,
+                len(self.images),
             )
             self.display_images()
             # 刷新文件夹树以更新选中状态
             self.build_folder_tree()
         except Exception as exc:  # 保底异常处理
-            print(f"加载文件夹失败: {exc}")
+            logger.exception("加载文件夹失败: {}", self.current_folder)
             self.page.snack_bar = ft.SnackBar(
                 content=ft.Text(f"无法加载文件夹: {exc}"),
                 bgcolor=ft.Colors.RED_400,
@@ -419,24 +400,29 @@ class ImageViewerApp:
             self.page.update()
 
     def update_device_list(self) -> None:
-        """更新移动设备列表"""
+        """更新移动设备列表（委托给 core.file_browser）。"""
         assert self.device_list is not None
 
         self.device_list.controls.clear()
 
+        context = file_browser.FolderTreeContext(
+            home_path=self.home_path,
+            volumes_path=self.volumes_path,
+            current_folder=self.current_folder,
+            expanded_folders=self.expanded_folders,
+        )
+        callbacks = file_browser.FolderTreeCallbacks(
+            on_folder_selected=lambda p: self.load_folder(str(p)),
+            on_toggle_expand=self.toggle_folder_expand,
+        )
+
         try:
-            devices = device_service.get_connected_devices(self.volumes_path)
-            if devices:
-                for device in devices:
-                    # 使用递归渲染，支持展开子文件夹
-                    device_controls = self.render_folder_with_children(
-                        folder_path=device,
-                        name=device.name,
-                        icon=ft.icons.Icons.USB,
-                        level=0  # 第一级
-                    )
-                    self.device_list.controls.extend(device_controls)
+            device_items = file_browser.build_device_items(context, callbacks)
+            if device_items:
+                logger.info("Detected {} device(s) in /Volumes", len(device_items))
+                self.device_list.controls.extend(device_items)
             else:
+                logger.info("No external devices detected")
                 self.device_list.controls.append(
                     ft.Container(
                         content=ft.Text(
@@ -446,36 +432,25 @@ class ImageViewerApp:
                     )
                 )
         except Exception as exc:
-            print(f"读取设备列表失败: {exc}")
+            logger.exception("读取设备列表失败: {}", exc)
 
         if self.page is not None:
             self.page.update()
 
     def get_subfolders(self, parent_path: Path) -> List[Path]:
-        """获取子文件夹列表"""
-        try:
-            subfolders = [
-                item for item in parent_path.iterdir()
-                if item.is_dir() 
-                and not item.name.startswith('.')  # 过滤隐藏文件夹
-                and not item.name.startswith('$')  # 过滤系统文件夹如 $RECYCLE.BIN
-            ]
-            return sorted(subfolders, key=lambda x: x.name.lower())
-        except (PermissionError, OSError) as exc:
-            print(f"无法访问文件夹 {parent_path}: {exc}")
-            return []
+        """获取子文件夹列表（委托给 core.file_browser）。"""
+        return file_browser.get_subfolders(parent_path)
 
     def has_subfolders(self, folder_path: Path) -> bool:
-        """检查文件夹是否包含子文件夹（总是返回 True 以显示箭头）"""
-        # 始终返回 True，让所有文件夹都显示箭头
-        return True
+        """检查文件夹是否包含子文件夹（委托给 core.file_browser）。"""
+        return file_browser.has_subfolders(folder_path)
 
     def is_folder_expanded(self, folder_path: Path) -> bool:
-        """检查文件夹是否已展开"""
+        """检查文件夹是否已展开。"""
         return folder_path in self.expanded_folders
 
     def toggle_folder_expand(self, folder_path: Path) -> None:
-        """切换文件夹展开状态"""
+        """切换文件夹展开状态并重新构建文件夹树。"""
         if folder_path in self.expanded_folders:
             self.expanded_folders.remove(folder_path)
         else:
@@ -489,52 +464,35 @@ class ImageViewerApp:
         icon,
         level: int = 0
     ) -> List[ft.Control]:
-        """递归渲染文件夹及其子文件夹
-        
-        Args:
-            folder_path: 文件夹路径
-            name: 显示名称
-            icon: 图标
-            level: 当前层级（0表示第一级）
-            
-        Returns:
-            包含文件夹项及其子文件夹的控件列表
-        """
-        controls = []
-        
-        # 添加当前文件夹项
-        controls.append(
-            self.create_folder_item(
-                name=name,
-                path=str(folder_path),
-                icon=icon,
-                level=level,
-                folder_path=folder_path
-            )
+        """递归渲染文件夹及其子文件夹（委托给 core.file_browser）。"""
+        context = file_browser.FolderTreeContext(
+            home_path=self.home_path,
+            volumes_path=self.volumes_path,
+            current_folder=self.current_folder,
+            expanded_folders=self.expanded_folders,
         )
-        
-        # 如果展开，递归渲染子文件夹
-        if self.is_folder_expanded(folder_path):
-            subfolders = self.get_subfolders(folder_path)
-            for subfolder in subfolders:
-                controls.extend(
-                    self.render_folder_with_children(
-                        folder_path=subfolder,
-                        name=subfolder.name,
-                        icon=ft.icons.Icons.FOLDER_OUTLINED,
-                        level=level + 1
-                    )
-                )
-        
-        return controls
+        callbacks = file_browser.FolderTreeCallbacks(
+            on_folder_selected=lambda p: self.load_folder(str(p)),
+            on_toggle_expand=self.toggle_folder_expand,
+        )
+        return file_browser.render_folder_with_children(
+            context=context,
+            callbacks=callbacks,
+            folder_path=folder_path,
+            name=name,
+            icon=icon,
+            level=level,
+        )
 
     def start_device_monitoring(self) -> None:
         """启动设备监听"""
+        logger.info("Starting device monitoring thread")
         self.monitoring_devices = True
 
         def monitor() -> None:
             while self.monitoring_devices:
                 time.sleep(settings.DEVICE_SCAN_INTERVAL)
+                logger.debug("Refreshing device list from monitoring thread")
                 self.update_device_list()
 
         thread = threading.Thread(target=monitor, daemon=True)
@@ -543,167 +501,54 @@ class ImageViewerApp:
     # === 图片列表与视图模式 ===
 
     def display_images(self) -> None:
-        """显示图片列表"""
+        """显示图片列表（委托给 core.image_gallery）。"""
         assert self.image_display is not None
         assert self.page is not None
 
         self.image_display.controls.clear()
 
-        if not self.images:
-            self.image_display.controls.append(
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Icon(
-                                ft.icons.Icons.IMAGE_NOT_SUPPORTED,
-                                size=100,
-                                color="#CCCCCC",
-                            ),
-                            ft.Text(
-                                "此文件夹中没有图片",
-                                color="#999999",
-                                size=16,
-                            ),
-                            ft.Text(
-                                f"当前文件夹: {self.current_folder.name if self.current_folder else ''}",
-                                color="#CCCCCC",
-                                size=12,
-                            ),
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=10,
-                    ),
-                    alignment=ft.Alignment(0, 0),
-                    expand=True,
-                )
-            )
-        else:
-            if self.view_mode == "grid":
-                self.display_grid_view()
-            else:
-                self.display_list_view()
+        controls = image_gallery.build_image_views(
+            images=self.images,
+            view_mode=self.view_mode,
+            current_folder=self.current_folder,
+            window_width=self.page.window.width,
+            on_preview=self.preview_image_at_index,
+        )
 
+        self.image_display.controls.extend(controls)
         self.page.update()
 
     def display_grid_view(self) -> None:
-        """网格视图"""
+        """网格视图（委托给 core.image_gallery）。"""
         assert self.page is not None
         assert self.image_display is not None
 
-        # 计算每行显示的图片数量
-        container_width = (
-            self.page.window.width - settings.LEFT_PANEL_WIDTH - settings.GRID_PADDING
-        )
-        thumbnail_size = settings.GRID_THUMBNAIL_SIZE
-        cols = max(2, int(container_width // (thumbnail_size + 20)))
-
-        # 创建网格
-        grid = ft.GridView(
-            expand=True,
-            runs_count=cols,
-            max_extent=thumbnail_size + 20,
-            child_aspect_ratio=0.8,
-            spacing=15,
-            run_spacing=15,
+        grid = image_gallery._build_grid_view(  # 内部使用，仅为兼容旧接口
+            images=self.images,
+            window_width=self.page.window.width,
+            on_preview=self.preview_image_at_index,
         )
 
-        for idx, image_path in enumerate(self.images[:100]):  # 虚拟滚动：先只加载前100张
-            try:
-                thumbnail = image_service.create_thumbnail_data_uri(
-                    image_path, thumbnail_size
-                )
-                if thumbnail:
-                    img_container = ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Image(
-                                    src=thumbnail,
-                                    width=thumbnail_size,
-                                    height=thumbnail_size,
-                                    fit=ft.BoxFit.COVER
-                                    if hasattr(ft, "BoxFit")
-                                    else "cover",
-                                    border_radius=8,
-                                ),
-                                ft.Text(
-                                    image_path.name,
-                                    size=12,
-                                    max_lines=1,
-                                    overflow=ft.TextOverflow.ELLIPSIS,
-                                    width=thumbnail_size,
-                                    text_align=ft.TextAlign.CENTER,
-                                ),
-                            ],
-                            spacing=5,
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        ),
-                        on_click=lambda e, i=idx: self.preview_image_at_index(i),
-                        ink=True,
-                        border_radius=8,
-                        padding=5,
-                        bgcolor="transparent",
-                        on_hover=self.on_image_hover,
-                    )
-                    grid.controls.append(img_container)
-            except Exception as exc:
-                print(f"加载缩略图失败: {image_path.name}, {exc}")
-
+        self.image_display.controls.clear()
         self.image_display.controls.append(grid)
 
     def display_list_view(self) -> None:
-        """列表视图"""
+        """列表视图（委托给 core.image_gallery）。"""
         assert self.image_display is not None
-
-        for idx, image_path in enumerate(self.images[:100]):  # 虚拟滚动
-            try:
-                stat = image_path.stat()
-                size_mb = stat.st_size / (1024 * 1024)
-
-                item = ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Icon(
-                                ft.icons.Icons.IMAGE,
-                                size=30,
-                                color="#1976D2",
-                            ),
-                            ft.Column(
-                                [
-                                    ft.Text(
-                                        image_path.name,
-                                        size=14,
-                                        weight=ft.FontWeight.W_500,
-                                    ),
-                                    ft.Text(
-                                        f"{size_mb:.2f} MB",
-                                        size=12,
-                                        color="#666666",
-                                    ),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
-                        ],
-                        spacing=15,
-                    ),
-                    padding=15,
-                    border=ft.Border(
-                        bottom=ft.BorderSide(1, "#E0E0E0"),
-                    ),
-                    ink=True,
-                    on_click=lambda e, i=idx: self.preview_image_at_index(i),
-                    bgcolor="transparent",
-                    on_hover=self.on_image_hover,
-                )
-                self.image_display.controls.append(item)
-            except Exception as exc:
-                print(f"加载图片信息失败: {image_path.name}, {exc}")
-
+    
+        items = image_gallery._build_list_view(  # 内部使用，仅为兼容旧接口
+            images=self.images,
+            on_preview=self.preview_image_at_index,
+        )
+    
+        self.image_display.controls.clear()
+        self.image_display.controls.extend(items)
+    
     def on_image_hover(self, e: ft.HoverEvent) -> None:
-        """图片悬停效果"""
+        """图片悬停效果（已由 core.image_gallery 处理，这里保留兼容）。"""
         e.control.bgcolor = "#F5F5F5" if e.data == "true" else "transparent"
         e.control.update()
-
+    
     def toggle_view_mode(self, e: ft.ControlEvent) -> None:
         """切换视图模式"""
         assert self.view_mode_btn is not None
@@ -727,88 +572,34 @@ class ImageViewerApp:
         self.show_preview()
 
     def show_preview(self) -> None:
-        """显示大图预览"""
+        """显示大图预览（委托给 core.preview）。"""
         assert self.preview_image is not None
         assert self.preview_dialog is not None
         assert self.position_indicator is not None
+        assert self.thumbnail_row is not None
         assert self.page is not None
 
-        if 0 <= self.current_image_index < len(self.images):
-            image_path = self.images[self.current_image_index]
-            try:
-                # 加载图片并转换为 data URI
-                self.preview_image.src = image_service.load_image_data_uri(image_path)
-
-                # 更新位置指示器
-                self.position_indicator.content.value = (
-                    f"{self.current_image_index + 1} / {len(self.images)}"
-                )
-
-                # 更新底部缩略图轮播
-                self.update_thumbnail_carousel()
-
-                self.preview_dialog.open = True
-                self.page.update()
-            except Exception as exc:
-                print(f"预览图片失败: {exc}")
-                self.page.snack_bar = ft.SnackBar(
-                    content=ft.Text(f"无法预览图片: {exc}"),
-                    bgcolor=ft.Colors.RED_400,
-                )
-                self.page.snack_bar.open = True
-                self.page.update()
+        preview.show_preview(
+            images=self.images,
+            current_index=self.current_image_index,
+            preview_image=self.preview_image,
+            position_indicator=self.position_indicator,
+            thumbnail_row=self.thumbnail_row,
+            preview_dialog=self.preview_dialog,
+            page=self.page,
+            on_thumbnail_click=lambda i: self.jump_to_image(i),
+        )
 
     def update_thumbnail_carousel(self) -> None:
-        """更新底部缩略图轮播"""
+        """更新底部缩略图轮播（委托给 core.preview）。"""
         assert self.thumbnail_row is not None
 
-        self.thumbnail_row.controls.clear()
-
-        # 计算显示范围：当前图片左右3张，总共7张
-        total_images = len(self.images)
-        visible_count = 7
-
-        if total_images <= visible_count:
-            start_idx = 0
-            end_idx = total_images
-        else:
-            half_visible = visible_count // 2  # 3
-            start_idx = max(0, self.current_image_index - half_visible)
-            end_idx = min(total_images, start_idx + visible_count)
-
-            if end_idx == total_images:
-                start_idx = max(0, total_images - visible_count)
-
-        for idx in range(start_idx, end_idx):
-            image_path = self.images[idx]
-            thumbnail = image_service.create_thumbnail_data_uri(image_path, 80)
-
-            if thumbnail:
-                is_current = idx == self.current_image_index
-                border = ft.Border(
-                    left=ft.BorderSide(3, "#1976D2" if is_current else "transparent"),
-                    right=ft.BorderSide(3, "#1976D2" if is_current else "transparent"),
-                    top=ft.BorderSide(3, "#1976D2" if is_current else "transparent"),
-                    bottom=ft.BorderSide(
-                        3, "#1976D2" if is_current else "transparent"
-                    ),
-                )
-
-                thumb_container = ft.Container(
-                    content=ft.Image(
-                        src=thumbnail,
-                        width=80,
-                        height=80,
-                        fit=ft.BoxFit.COVER
-                        if hasattr(ft, "BoxFit")
-                        else "cover",
-                    ),
-                    border=border,
-                    border_radius=5,
-                    on_click=lambda e, i=idx: self.jump_to_image(i),
-                    ink=True,
-                )
-                self.thumbnail_row.controls.append(thumb_container)
+        preview.update_thumbnail_carousel(
+            images=self.images,
+            current_index=self.current_image_index,
+            thumbnail_row=self.thumbnail_row,
+            on_thumbnail_click=lambda i: self.jump_to_image(i),
+        )
 
     def jump_to_image(self, index: int) -> None:
         """跳转到指定图片"""
@@ -838,17 +629,16 @@ class ImageViewerApp:
     # === 事件处理 ===
 
     def on_keyboard_event(self, e: ft.KeyboardEvent) -> None:
-        """处理键盘事件"""
+        """处理键盘事件（委托给 core.preview）。"""
         assert self.preview_dialog is not None
 
-        # 只在预览对话框打开时处理键盘事件
-        if self.preview_dialog.open:
-            if e.key == "Arrow Left":
-                self.show_previous_image(None)
-            elif e.key == "Arrow Right":
-                self.show_next_image(None)
-            elif e.key == "Escape":
-                self.close_preview(None)
+        preview.handle_keyboard_event(
+            key=e.key,
+            preview_open=self.preview_dialog.open,
+            show_previous=lambda: self.show_previous_image(None),
+            show_next=lambda: self.show_next_image(None),
+            close=lambda: self.close_preview(None),
+        )
 
     def on_window_resize(self, e: ft.ControlEvent) -> None:
         """窗口大小变化时重新布局"""
