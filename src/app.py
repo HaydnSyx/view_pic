@@ -11,6 +11,7 @@ from loguru import logger
 from src.config import settings
 from src.core import file_browser, image_gallery, preview
 from src.services import device_service, image_service
+from src.services.async_thumbnail_service import AsyncThumbnailService
 
 
 class ImageViewerApp:
@@ -31,6 +32,17 @@ class ImageViewerApp:
         self.zoom_level: float = 1.0
         self.expanded_folders: Set[Path] = set()  # 存储展开的文件夹路径
 
+        # 分页加载相关状态
+        self.current_offset: int = 0  # 当前加载偏移量
+        self.has_more_images: bool = False  # 是否还有更多图片
+        self.total_images_count: int = 0  # 当前已知总数（估算值）
+
+        # 异步缩略图相关状态
+        self.async_thumbnail_service: AsyncThumbnailService | None = None
+        self.current_grid: ft.GridView | None = None  # 当前网格视图引用
+        self.is_loading_thumbnails: bool = False  # 是否正在加载缩略图
+        self.loaded_thumbnail_count: int = 0  # 已加载的缩略图数量
+
         # 运行时属性（初始化为 None，create_ui 中赋值）
         self.page: ft.Page | None = None
         self.folder_tree: ft.Column | None = None
@@ -42,6 +54,7 @@ class ImageViewerApp:
         self.position_indicator: ft.Container | None = None
         self.thumbnail_row: ft.Row | None = None
         self.preview_dialog: ft.AlertDialog | None = None
+        self.load_more_button: ft.Container | None = None  # "加载更多"按钮
 
     def main(self, page: ft.Page) -> None:
         """Flet 应用入口函数"""
@@ -64,6 +77,11 @@ class ImageViewerApp:
         self.page = page
 
         logger.info("Initializing ImageViewerApp UI")
+
+        # 初始化异步缩略图服务
+        self.async_thumbnail_service = AsyncThumbnailService(
+            max_workers=settings.THUMBNAIL_WORKER_THREADS
+        )
 
         # 创建UI组件
         self.create_ui()
@@ -139,6 +157,39 @@ class ImageViewerApp:
             scroll=ft.ScrollMode.AUTO,
             spacing=10,
             expand=True,
+        )
+
+        # 加载状态指示器
+        self.loading_progress_text = ft.Text(
+            "正在加载图片... (0/0)",
+            size=14,
+            color="#FF6F00",
+        )
+
+        self.loading_indicator = ft.Container(
+            content=ft.Row(
+                [
+                    ft.ProgressRing(width=20, height=20, stroke_width=2),
+                    self.loading_progress_text,
+                    ft.TextButton(
+                        "取消",
+                        icon=ft.icons.Icons.CANCEL,
+                        on_click=self.cancel_loading,
+                        style=ft.ButtonStyle(
+                            color="#D32F2F",  # 红色
+                        ),
+                    ),
+                ],
+                spacing=10,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.only(left=10, right=10, top=10, bottom=10),
+            bgcolor="#FFF3E0",
+            border_radius=8,
+            border=ft.Border(
+                left=ft.BorderSide(4, "#FF6F00"),
+            ),
+            visible=False,  # 默认隐藏
         )
 
         self.image_container = ft.Container(
@@ -394,20 +445,41 @@ class ImageViewerApp:
         e.control.update()
 
     def load_folder(self, folder_path: str) -> None:
-        """加载文件夹中的图片"""
+        """加载文件夹中的图片（使用分页加载）"""
         assert self.page is not None
 
         self.current_folder = Path(folder_path)
+        # 重置分页状态
+        self.current_offset = 0
+        self.has_more_images = False
+        self.total_images_count = 0
+        self.images = []  # 清空现有图片列表
+
         try:
-            logger.info("Loading folder: {}", self.current_folder)
-            self.images = image_service.list_images_in_folder(
-                self.current_folder, self.supported_formats
-            )
-            logger.info(
-                "Loaded folder: {} with {} images",
+            logger.info("开始加载文件夹: {}", self.current_folder)
+
+            # 使用新的分页加载方法
+            batch_result = image_service.list_images_in_folder_batch(
                 self.current_folder,
-                len(self.images),
+                self.supported_formats,
+                offset=0,
+                limit=settings.INITIAL_IMAGE_LOAD_LIMIT,
             )
+
+            self.images = batch_result.images
+            self.current_offset = batch_result.offset
+            self.has_more_images = batch_result.has_more
+            self.total_images_count = batch_result.total_count
+
+            logger.info(
+                "加载文件夹完成: {}, 得到 {} 张图片, "
+                "总数={}, has_more={}",
+                self.current_folder.name,
+                len(self.images),
+                self.total_images_count,
+                self.has_more_images,
+            )
+
             self.display_images()
             # 刷新文件夹树以更新选中状态
             self.build_folder_tree()
@@ -415,6 +487,55 @@ class ImageViewerApp:
             logger.exception("加载文件夹失败: {}", self.current_folder)
             self.page.snack_bar = ft.SnackBar(
                 content=ft.Text(f"无法加载文件夹: {exc}"),
+                bgcolor=ft.Colors.RED_400,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+
+    def load_more_images(self, e: ft.ControlEvent | None = None) -> None:
+        """加载更多图片（下一批）"""
+        assert self.page is not None
+        assert self.current_folder is not None
+
+        if not self.has_more_images:
+            logger.warning("没有更多图片可加载")
+            return
+
+        try:
+            logger.info(
+                "加载更多图片, offset={}, limit={}",
+                self.current_offset,
+                settings.LOAD_MORE_BATCH_SIZE,
+            )
+
+            batch_result = image_service.list_images_in_folder_batch(
+                self.current_folder,
+                self.supported_formats,
+                offset=self.current_offset,
+                limit=settings.LOAD_MORE_BATCH_SIZE,
+            )
+
+            # 追加新图片到现有列表
+            self.images.extend(batch_result.images)
+            self.current_offset = batch_result.offset
+            self.has_more_images = batch_result.has_more
+            self.total_images_count = batch_result.total_count
+
+            logger.info(
+                "加载更多完成, 新增 {} 张, "
+                "当前总数={}, has_more={}",
+                len(batch_result.images),
+                len(self.images),
+                self.has_more_images,
+            )
+
+            # 重新渲染图片列表
+            self.display_images()
+
+        except Exception as exc:
+            logger.exception("加载更多图片失败: {}", exc)
+            self.page.snack_bar = ft.SnackBar(
+                content=ft.Text(f"加载失败: {exc}"),
                 bgcolor=ft.Colors.RED_400,
             )
             self.page.snack_bar.open = True
@@ -528,6 +649,43 @@ class ImageViewerApp:
 
         self.image_display.controls.clear()
 
+        # 如果启用异步渲染且是网格视图，使用异步加载
+        if (
+            settings.ENABLE_PROGRESSIVE_RENDERING
+            and self.view_mode == "grid"
+            and len(self.images) > 0
+        ):
+            self._display_images_async()
+        else:
+            # 否则使用同步加载（列表视图或禁用异步）
+            self._display_images_sync()
+
+        # 如果还有更多图片，显示“加载更多”按钮
+        if self.has_more_images and len(self.images) > 0:
+            self.load_more_button = ft.Container(
+                content=ft.Row(
+                    [
+                        ft.ElevatedButton(
+                            text=f"加载更多 (当前已加载 {len(self.images)} 张)",
+                            icon=ft.icons.Icons.EXPAND_MORE,
+                            on_click=self.load_more_images,
+                            bgcolor="#1976D2",
+                            color="white",
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                ),
+                padding=20,
+            )
+            self.image_display.controls.append(self.load_more_button)
+
+        self.page.update()
+
+    def _display_images_sync(self) -> None:
+        """同步显示图片（原有逻辑）。"""
+        assert self.image_display is not None
+        assert self.page is not None
+
         controls = image_gallery.build_image_views(
             images=self.images,
             view_mode=self.view_mode,
@@ -537,7 +695,188 @@ class ImageViewerApp:
         )
 
         self.image_display.controls.extend(controls)
+
+    def _display_images_async(self) -> None:
+        """异步显示图片（渐进式渲染）。"""
+        assert self.image_display is not None
+        assert self.page is not None
+        assert self.async_thumbnail_service is not None
+
+        # 取消之前的加载任务
+        if self.is_loading_thumbnails:
+            self.async_thumbnail_service.cancel_current_task()
+
+        # 显示加载指示器
+        if settings.SHOW_LOADING_INDICATOR:
+            self.show_loading_indicator(len(self.images[:100]))
+
+        # 创建带占位符的网格视图
+        self.current_grid = image_gallery.build_grid_with_placeholders(
+            images=self.images,
+            window_width=self.page.window.width,
+            on_preview=self.preview_image_at_index,
+        )
+
+        self.image_display.controls.append(self.current_grid)
+        self.page.update()  # 立即显示占位符
+
+        # 启动异步缩略图生成
+        self.is_loading_thumbnails = True
+        self.loaded_thumbnail_count = 0
+
+        # 只加载前100张（与占位符数量一致）
+        images_to_load = self.images[:100]
+
+        logger.info(
+            "启动异步缩略图生成, 共 {} 张",
+            len(images_to_load)
+        )
+
+        self.async_thumbnail_service.generate_thumbnails_async(
+            images=images_to_load,
+            thumbnail_size=settings.GRID_THUMBNAIL_SIZE,
+            on_single_complete=self._on_thumbnail_complete,
+            on_all_complete=self._on_all_thumbnails_complete,
+            on_progress=self._on_thumbnail_progress,
+        )
+
+    def _on_thumbnail_complete(self, index: int, data_uri: str, image_path: Path) -> None:
+        """单张缩略图生成完成回调（在工作线程中调用）。"""
+        if not self.page or not self.current_grid:
+            return
+
+        try:
+            success = image_gallery.update_thumbnail_in_grid(
+                grid=self.current_grid,
+                index=index,
+                data_uri=data_uri,
+                image_path=image_path,
+                thumbnail_size=settings.GRID_THUMBNAIL_SIZE,
+                on_preview=self.preview_image_at_index,
+            )
+
+            if success:
+                # Flet 支持在线程中直接调用 update()
+                self.current_grid.update()
+                logger.debug(
+                    "缩略图UI更新成功: index={}, name={}",
+                    index,
+                    image_path.name
+                )
+        except Exception as exc:
+            logger.exception("更新缩略图UI失败: {}", exc)
+
+    def _on_thumbnail_progress(self, completed: int, total: int) -> None:
+        """缩略图生成进度回调。"""
+        self.loaded_thumbnail_count = completed
+        
+        # 更新加载指示器
+        if settings.SHOW_LOADING_INDICATOR:
+            try:
+                self.update_loading_progress(completed, total)
+            except Exception as exc:
+                logger.error("更新进度指示器失败: {}", exc)
+        
+        logger.debug("缩略图生成进度: {}/{}", completed, total)
+
+    def _on_all_thumbnails_complete(self) -> None:
+        """所有缩略图生成完成回调。"""
+        self.is_loading_thumbnails = False
+        
+        # 隐藏加载指示器
+        if settings.SHOW_LOADING_INDICATOR:
+            try:
+                self.hide_loading_indicator()
+            except Exception as exc:
+                logger.error("隐藏指示器失败: {}", exc)
+        
+        logger.info(
+            "所有缩略图生成完成, 共 {} 张",
+            self.loaded_thumbnail_count
+        )
+
+    # === 加载状态指示器 ===
+
+    def show_loading_indicator(self, total: int) -> None:
+        """显示加载指示器。
+        
+        Args:
+            total: 总图片数量
+        """
+        if not self.loading_indicator or not self.page:
+            return
+
+        self.loaded_thumbnail_count = 0
+        self.loading_progress_text.value = f"正在加载图片... (0/{total})"
+        self.loading_indicator.visible = True
+        
+        # 将指示器插入到图片显示区域顶部
+        if self.image_display:
+            self.image_display.controls.insert(0, self.loading_indicator)
+        
         self.page.update()
+        logger.debug("显示加载指示器, 总数: {}", total)
+
+    def update_loading_progress(self, completed: int, total: int) -> None:
+        """更新加载进度。
+        
+        Args:
+            completed: 已完成数量
+            total: 总数量
+        """
+        if not self.loading_progress_text:
+            return
+
+        self.loading_progress_text.value = (
+            f"正在加载图片... ({completed}/{total})"
+        )
+        
+        if self.loading_indicator:
+            self.loading_indicator.update()
+
+    def hide_loading_indicator(self) -> None:
+        """隐藏加载指示器。"""
+        if not self.loading_indicator:
+            return
+
+        self.loading_indicator.visible = False
+        
+        # 从图片显示区域移除指示器
+        if self.image_display and self.loading_indicator in self.image_display.controls:
+            self.image_display.controls.remove(self.loading_indicator)
+        
+        if self.page:
+            self.page.update()
+        
+        logger.debug("隐藏加载指示器")
+
+    def cancel_loading(self, e: ft.ControlEvent | None = None) -> None:
+        """取消当前加载任务。
+        
+        Args:
+            e: 事件对象（可选）
+        """
+        logger.info("用户取消加载任务")
+
+        # 取消异步缩略图生成
+        if self.async_thumbnail_service:
+            self.async_thumbnail_service.cancel_current_task()
+
+        self.is_loading_thumbnails = False
+        
+        # 隐藏指示器
+        self.hide_loading_indicator()
+        
+        # 显示取消提示
+        if self.page:
+            self.page.snack_bar = ft.SnackBar(
+                content=ft.Text(
+                    f"已取消加载，已显示 {self.loaded_thumbnail_count} 张图片"
+                ),
+                bgcolor="#F57C00",  # 橙色
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
 
     def display_grid_view(self) -> None:
         """网格视图（委托给 core.image_gallery）。"""

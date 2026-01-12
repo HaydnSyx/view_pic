@@ -138,6 +138,178 @@ def _build_grid_view(
     return grid
 
 
+def build_grid_with_placeholders(
+    images: List[Path],
+    window_width: float,
+    on_preview: Callable[[int], None],
+) -> ft.GridView:
+    """构建带占位符的网格视图（用于异步加载）。
+    
+    初始渲染时显示占位符，后续通过外部调用更新为真实缩略图。
+    
+    Args:
+        images: 图片路径列表
+        window_width: 窗口宽度
+        on_preview: 预览回调
+        
+    Returns:
+        ft.GridView: 网格视图控件，每个单元格带有 data 字段存储索引
+    """
+    container_width = (
+        window_width - settings.LEFT_PANEL_WIDTH - settings.GRID_PADDING
+    )
+    thumbnail_size = settings.GRID_THUMBNAIL_SIZE
+    cols = max(2, int(container_width // (thumbnail_size + 20)))
+
+    grid = ft.GridView(
+        expand=True,
+        runs_count=cols,
+        max_extent=thumbnail_size + 20,
+        child_aspect_ratio=0.8,
+        spacing=15,
+        run_spacing=15,
+    )
+
+    # 创建占位符容器（最多100个）
+    for idx, image_path in enumerate(images[:100]):
+        placeholder_container = _create_thumbnail_placeholder(
+            index=idx,
+            image_path=image_path,
+            thumbnail_size=thumbnail_size,
+            on_preview=on_preview,
+        )
+        grid.controls.append(placeholder_container)
+
+    logger.debug(
+        "创建带占位符的网格视图, 共 {} 个占位符",
+        len(grid.controls)
+    )
+
+    return grid
+
+
+def _create_thumbnail_placeholder(
+    index: int,
+    image_path: Path,
+    thumbnail_size: int,
+    on_preview: Callable[[int], None],
+) -> ft.Container:
+    """创建单个缩略图占位符。
+    
+    Args:
+        index: 图片索引
+        image_path: 图片路径
+        thumbnail_size: 缩略图尺寸
+        on_preview: 预览回调
+        
+    Returns:
+        ft.Container: 占位符容器，带有 data 字段存储 {"index": idx}
+    """
+    return ft.Container(
+        content=ft.Column(
+            [
+                # 占位图标
+                ft.Container(
+                    content=ft.Icon(
+                        ft.icons.Icons.IMAGE,
+                        size=60,
+                        color="#CCCCCC",
+                    ),
+                    width=thumbnail_size,
+                    height=thumbnail_size,
+                    bgcolor="#F5F5F5",
+                    border_radius=8,
+                    alignment=ft.Alignment(0, 0),
+                ),
+                # 文件名
+                ft.Text(
+                    image_path.name,
+                    size=12,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    width=thumbnail_size,
+                    text_align=ft.TextAlign.CENTER,
+                    color="#999999",
+                ),
+            ],
+            spacing=5,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        on_click=lambda e, i=index: on_preview(i),
+        ink=True,
+        border_radius=8,
+        padding=5,
+        bgcolor="transparent",
+        on_hover=_on_image_hover,
+        data={"index": index, "image_path": str(image_path)},  # 存储索引信息
+    )
+
+
+def update_thumbnail_in_grid(
+    grid: ft.GridView,
+    index: int,
+    data_uri: str,
+    image_path: Path,
+    thumbnail_size: int,
+    on_preview: Callable[[int], None],
+) -> bool:
+    """更新网格中指定索引的缩略图。
+    
+    将占位符替换为真实缩略图。
+    
+    Args:
+        grid: 网格视图控件
+        index: 要更新的图片索引
+        data_uri: 缩略图 base64 data URI
+        image_path: 图片路径
+        thumbnail_size: 缩略图尺寸
+        on_preview: 预览回调
+        
+    Returns:
+        bool: 是否成功更新
+    """
+    if index >= len(grid.controls):
+        logger.warning(
+            "索引超出范围: index={}, grid.controls.length={}",
+            index,
+            len(grid.controls)
+        )
+        return False
+
+    container = grid.controls[index]
+    
+    # 验证是否为正确的容器
+    if not isinstance(container, ft.Container):
+        logger.error("索引 {} 的控件不是 Container", index)
+        return False
+
+    # 更新内容为真实缩略图
+    container.content = ft.Column(
+        [
+            ft.Image(
+                src=data_uri,
+                width=thumbnail_size,
+                height=thumbnail_size,
+                fit=ft.BoxFit.COVER if hasattr(ft, "BoxFit") else "cover",
+                border_radius=8,
+            ),
+            ft.Text(
+                image_path.name,
+                size=12,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+                width=thumbnail_size,
+                text_align=ft.TextAlign.CENTER,
+                color="#333333",  # 恢复正常颜色
+            ),
+        ],
+        spacing=5,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    return True
+
+
 def _build_list_view(
     images: List[Path], on_preview: Callable[[int], None]
 ) -> List[ft.Control]:
