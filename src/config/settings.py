@@ -32,6 +32,7 @@ LOAD_MORE_BATCH_SIZE: int = 200  # "加载更多"每次追加数量
 THUMBNAIL_WORKER_THREADS: int = 4  # 线程池大小（建议 2-8）
 INITIAL_THUMBNAIL_COUNT: int = 50  # 首屏立即生成数量
 THUMBNAIL_GENERATION_TIMEOUT: int = 5  # 单张缩略图生成超时（秒）
+THUMBNAIL_CACHE_SIZE: int = 200  # 缩略图缓存队列大小（FIFO）
 
 # 渲染配置
 ENABLE_PROGRESSIVE_RENDERING: bool = True  # 是否启用渐进式渲染

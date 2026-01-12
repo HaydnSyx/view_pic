@@ -7,6 +7,7 @@ from typing import Callable, List, Optional, Dict
 from loguru import logger
 
 from src.services import image_service
+from src.services.thumbnail_cache import get_thumbnail_cache
 from src.config import settings
 
 
@@ -29,6 +30,7 @@ class AsyncThumbnailService:
         )
         self.current_task_id: Optional[str] = None
         self.futures: List[Future] = []
+        self.cache = get_thumbnail_cache()  # 获取缓存实例
         
         logger.info("AsyncThumbnailService 初始化, 线程池大小: {}", max_workers)
 
@@ -73,12 +75,28 @@ class AsyncThumbnailService:
                 return None
 
             try:
-                # 生成缩略图
+                # 先从缓存中获取
+                data_uri = self.cache.get(image_path)
+                
+                if data_uri:
+                    # 缓存命中，直接返回
+                    logger.debug(
+                        "缩略图使用缓存 [{}/{}]: {}",
+                        index + 1,
+                        total_count,
+                        image_path.name
+                    )
+                    return (index, data_uri, image_path)
+                
+                # 缓存未命中，生成缩略图
                 data_uri = image_service.create_thumbnail_data_uri(
                     image_path, thumbnail_size
                 )
                 
                 if data_uri:
+                    # 存入缓存
+                    self.cache.put(image_path, data_uri)
+                    
                     logger.debug(
                         "缩略图生成成功 [{}/{}]: {}",
                         index + 1,

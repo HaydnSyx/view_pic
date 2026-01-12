@@ -10,6 +10,7 @@ from loguru import logger
 
 from src.config import settings
 from src.services import image_service
+from src.services.thumbnail_cache import get_thumbnail_cache
 from src.utils.fs_utils import format_file_size
 
 
@@ -90,11 +91,23 @@ def _build_grid_view(
         run_spacing=15,
     )
 
+    # 获取缓存实例
+    cache = get_thumbnail_cache()
+
     for idx, image_path in enumerate(images[:100]):  # 虚拟滚动：先只加载前100张
         try:
-            thumbnail = image_service.create_thumbnail_data_uri(
-                image_path, thumbnail_size
-            )
+            # 先从缓存中获取
+            thumbnail = cache.get(image_path)
+            
+            if not thumbnail:
+                # 缓存未命中，生成缩略图
+                thumbnail = image_service.create_thumbnail_data_uri(
+                    image_path, thumbnail_size
+                )
+                if thumbnail:
+                    # 存入缓存
+                    cache.put(image_path, thumbnail)
+            
             if not thumbnail:
                 continue
 

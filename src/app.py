@@ -42,6 +42,7 @@ class ImageViewerApp:
         self.current_grid: ft.GridView | None = None  # 当前网格视图引用
         self.is_loading_thumbnails: bool = False  # 是否正在加载缩略图
         self.loaded_thumbnail_count: int = 0  # 已加载的缩略图数量
+        self._uncached_index_map: dict = {}  # 未缓存图片的索引映射
 
         # 运行时属性（初始化为 None，create_ui 中赋值）
         self.page: ft.Page | None = None
@@ -720,9 +721,31 @@ class ImageViewerApp:
         if self.is_loading_thumbnails:
             self.async_thumbnail_service.cancel_current_task()
 
-        # 显示加载指示器
-        if settings.SHOW_LOADING_INDICATOR:
-            self.show_loading_indicator(len(self.images[:100]))
+        # 只加载前100张（与占位符数量一致）
+        images_to_display = self.images[:100]
+        
+        # 检查缓存，分离已缓存和未缓存的图片
+        cache = self.async_thumbnail_service.cache
+        cached_images = []  # (index, image_path, data_uri)
+        uncached_images = []  # (index, image_path)
+        
+        for idx, image_path in enumerate(images_to_display):
+            data_uri = cache.get(image_path)
+            if data_uri:
+                cached_images.append((idx, image_path, data_uri))
+            else:
+                uncached_images.append((idx, image_path))
+        
+        logger.info(
+            "图片缓存检查: 总数={}, 缓存命中={}, 需生成={}",
+            len(images_to_display),
+            len(cached_images),
+            len(uncached_images)
+        )
+
+        # 显示加载指示器（只在有未缓存图片时显示）
+        if settings.SHOW_LOADING_INDICATOR and len(uncached_images) > 0:
+            self.show_loading_indicator(len(uncached_images))
 
         # 创建带占位符的网格视图
         self.current_grid = image_gallery.build_grid_with_placeholders(
@@ -732,26 +755,46 @@ class ImageViewerApp:
         )
 
         self.image_display.controls.append(self.current_grid)
-        self.page.update()  # 立即显示占位符
+        
+        # 先更新已缓存的图片（同步，立即显示）
+        for idx, image_path, data_uri in cached_images:
+            image_gallery.update_thumbnail_in_grid(
+                grid=self.current_grid,
+                index=idx,
+                data_uri=data_uri,
+                image_path=image_path,
+                thumbnail_size=settings.GRID_THUMBNAIL_SIZE,
+                on_preview=self.preview_image_at_index,
+            )
+        
+        self.page.update()  # 立即显示占位符和已缓存的图片
 
-        # 启动异步缩略图生成
+        # 如果所有图片都已缓存，直接返回，不启动异步任务
+        if len(uncached_images) == 0:
+            logger.info("所有图片已缓存，无需生成缩略图")
+            return
+
+        # 启动异步缩略图生成（只为未缓存的图片）
         self.is_loading_thumbnails = True
-        self.loaded_thumbnail_count = 0
+        self.loaded_thumbnail_count = len(cached_images)  # 已缓存的计为已完成
 
-        # 只加载前100张（与占位符数量一致）
-        images_to_load = self.images[:100]
-
+        # 提取未缓存图片的 Path 列表
+        uncached_image_paths = [img_path for idx, img_path in uncached_images]
+        
         logger.info(
             "启动异步缩略图生成, 共 {} 张",
-            len(images_to_load)
+            len(uncached_image_paths)
         )
 
+        # 生成缩略图，但需要映射回原始索引
+        self._uncached_index_map = {i: original_idx for i, (original_idx, _) in enumerate(uncached_images)}
+        
         self.async_thumbnail_service.generate_thumbnails_async(
-            images=images_to_load,
+            images=uncached_image_paths,
             thumbnail_size=settings.GRID_THUMBNAIL_SIZE,
-            on_single_complete=self._on_thumbnail_complete,
+            on_single_complete=self._on_thumbnail_complete_filtered,
             on_all_complete=self._on_all_thumbnails_complete,
-            on_progress=self._on_thumbnail_progress,
+            on_progress=self._on_thumbnail_progress_filtered,
         )
 
     def _on_thumbnail_complete(self, index: int, data_uri: str, image_path: Path) -> None:
@@ -780,6 +823,18 @@ class ImageViewerApp:
         except Exception as exc:
             logger.exception("更新缩略图UI失败: {}", exc)
 
+    def _on_thumbnail_complete_filtered(self, index: int, data_uri: str, image_path: Path) -> None:
+        """单张缩略图生成完成回调（过滤后的索引）。
+        
+        Args:
+            index: 在未缓存列表中的索引
+            data_uri: 缩略图 data URI
+            image_path: 图片路径
+        """
+        # 映射回原始索引
+        original_index = self._uncached_index_map.get(index, index)
+        self._on_thumbnail_complete(original_index, data_uri, image_path)
+
     def _on_thumbnail_progress(self, completed: int, total: int) -> None:
         """缩略图生成进度回调。"""
         self.loaded_thumbnail_count = completed
@@ -792,6 +847,19 @@ class ImageViewerApp:
                 logger.error("更新进度指示器失败: {}", exc)
         
         logger.debug("缩略图生成进度: {}/{}", completed, total)
+
+    def _on_thumbnail_progress_filtered(self, completed: int, total: int) -> None:
+        """缩略图生成进度回调（过滤后的）。
+        
+        Args:
+            completed: 已完成数量（未缓存的）
+            total: 总数量（未缓存的）
+        """
+        # 加上已缓存的数量
+        cached_count = self.loaded_thumbnail_count - completed  # 初始时设置为已缓存数
+        actual_completed = len(self._uncached_index_map) - total + completed  # 已缓存 + 已生成
+        
+        self._on_thumbnail_progress(completed, total)
 
     def _on_all_thumbnails_complete(self) -> None:
         """所有缩略图生成完成回调。"""
