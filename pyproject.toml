@@ -8,6 +8,7 @@ dependencies = [
     "flet>=0.24.0",
     "pillow>=10.0.0",
     "loguru>=0.7.2",
+    "watchdog>=5.0.0",
 ]
 
 [tool.uv]

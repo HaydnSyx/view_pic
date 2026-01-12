@@ -28,8 +28,13 @@ def list_images_in_folder(folder: Path, supported_formats: tuple[str, ...]) -> L
     """
     images: List[Path] = []
     for file in folder.iterdir():
+        # 过滤隐藏文件（以 . 开头）
+        if file.name.startswith('.'):
+            continue
+        
         if file.is_file() and file.suffix.lower() in supported_formats:
             images.append(file)
+    
     images.sort(key=lambda x: x.name)
     return images
 
@@ -59,6 +64,10 @@ def list_images_in_folder_batch(
     try:
         # 遍历文件夹，收集符合条件的图片
         for file in folder.iterdir():
+            # 过滤隐藏文件（以 . 开头）
+            if file.name.startswith('.'):
+                continue
+            
             if not file.is_file() or file.suffix.lower() not in supported_formats:
                 continue
 

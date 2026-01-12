@@ -9,9 +9,6 @@ SUPPORTED_IMAGE_FORMATS: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".gif")
 VOLUMES_PATH: Path = Path("/Volumes")
 HOME_PATH: Path = Path.home()
 
-# 设备扫描时间间隔（秒）
-DEVICE_SCAN_INTERVAL: int = 3
-
 # UI 相关常量
 WINDOW_WIDTH: int = 1200
 WINDOW_HEIGHT: int = 800

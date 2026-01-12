@@ -1,7 +1,5 @@
 """应用入口模块，包含 ImageViewerApp 主类。"""
 
-import threading
-import time
 from pathlib import Path
 from typing import List, Set
 
@@ -12,6 +10,7 @@ from src.config import settings
 from src.core import file_browser, image_gallery, preview
 from src.services import device_service, image_service
 from src.services.async_thumbnail_service import AsyncThumbnailService
+from src.services.device_monitor import DeviceMonitor
 
 
 class ImageViewerApp:
@@ -26,7 +25,7 @@ class ImageViewerApp:
         self.supported_formats = settings.SUPPORTED_IMAGE_FORMATS
         self.volumes_path: Path = settings.VOLUMES_PATH
         self.home_path: Path = settings.HOME_PATH
-        self.monitoring_devices: bool = False
+        self.device_monitor: DeviceMonitor | None = None  # 设备监听器
 
         # 预览相关状态
         self.zoom_level: float = 1.0
@@ -558,28 +557,32 @@ class ImageViewerApp:
 
     def update_device_list(self) -> None:
         """更新移动设备列表（委托给 core.file_browser）。"""
-        assert self.device_list is not None
-
-        self.device_list.controls.clear()
-
-        context = file_browser.FolderTreeContext(
-            home_path=self.home_path,
-            volumes_path=self.volumes_path,
-            current_folder=self.current_folder,
-            expanded_folders=self.expanded_folders,
-        )
-        callbacks = file_browser.FolderTreeCallbacks(
-            on_folder_selected=lambda p: self.load_folder(str(p)),
-            on_toggle_expand=self.toggle_folder_expand,
-        )
+        if not self.device_list or not self.page:
+            logger.warning("设备列表或页面未初始化，跳过更新")
+            return
 
         try:
+            logger.debug("开始更新设备列表...")
+            
+            self.device_list.controls.clear()
+
+            context = file_browser.FolderTreeContext(
+                home_path=self.home_path,
+                volumes_path=self.volumes_path,
+                current_folder=self.current_folder,
+                expanded_folders=self.expanded_folders,
+            )
+            callbacks = file_browser.FolderTreeCallbacks(
+                on_folder_selected=lambda p: self.load_folder(str(p)),
+                on_toggle_expand=self.toggle_folder_expand,
+            )
+
             device_items = file_browser.build_device_items(context, callbacks)
             if device_items:
-                logger.info("Detected {} device(s) in /Volumes", len(device_items))
+                logger.info("检测到 {} 个外部设备", len(device_items))
                 self.device_list.controls.extend(device_items)
             else:
-                logger.info("No external devices detected")
+                logger.info("未检测到外部设备")
                 self.device_list.controls.append(
                     ft.Container(
                         content=ft.Text(
@@ -588,11 +591,14 @@ class ImageViewerApp:
                         padding=10,
                     )
                 )
-        except Exception as exc:
-            logger.exception("读取设备列表失败: {}", exc)
-
-        if self.page is not None:
+            
+            # 强制更新UI
+            self.device_list.update()
             self.page.update()
+            logger.debug("设备列表更新完成")
+            
+        except Exception as exc:
+            logger.exception("更新设备列表失败: {}", exc)
 
     def get_subfolders(self, parent_path: Path) -> List[Path]:
         """获取子文件夹列表（委托给 core.file_browser）。"""
@@ -642,18 +648,27 @@ class ImageViewerApp:
         )
 
     def start_device_monitoring(self) -> None:
-        """启动设备监听"""
-        logger.info("Starting device monitoring thread")
-        self.monitoring_devices = True
+        """启动设备监听（使用 watchdog 事件驱动）。"""
+        logger.info("启动设备监听器（watchdog 模式）")
+        
+        # 创建设备监听器
+        self.device_monitor = DeviceMonitor(
+            volumes_path=self.volumes_path,
+            on_device_change=self.update_device_list
+        )
+        
+        # 启动监听
+        success = self.device_monitor.start()
+        if success:
+            logger.info("设备监听器启动成功，将实时响应设备插拔")
+        else:
+            logger.error("设备监听器启动失败，请检查日志")
 
-        def monitor() -> None:
-            while self.monitoring_devices:
-                time.sleep(settings.DEVICE_SCAN_INTERVAL)
-                logger.debug("Refreshing device list from monitoring thread")
-                self.update_device_list()
-
-        thread = threading.Thread(target=monitor, daemon=True)
-        thread.start()
+    def stop_device_monitoring(self) -> None:
+        """停止设备监听。"""
+        if self.device_monitor:
+            self.device_monitor.stop()
+            logger.info("设备监听器已停止")
 
     # === 图片列表与视图模式 ===
 
@@ -681,7 +696,7 @@ class ImageViewerApp:
                 content=ft.Row(
                     [
                         ft.ElevatedButton(
-                            text=f"加载更多 (当前已加载 {len(self.images)} 张)",
+                            content=ft.Text(f"加载更多 (当前已加载 {len(self.images)} 张)"),
                             icon=ft.icons.Icons.EXPAND_MORE,
                             on_click=self.load_more_images,
                             bgcolor="#1976D2",
