@@ -362,6 +362,7 @@ class ImageViewerApp:
         callbacks = file_browser.FolderTreeCallbacks(
             on_folder_selected=lambda p: self.load_folder(str(p)),
             on_toggle_expand=self.toggle_folder_expand,
+            on_refresh_devices=self.update_device_list,  # 添加刷新设备回调
         )
 
         controls, device_list = file_browser.build_folder_tree(context, callbacks)
@@ -575,6 +576,7 @@ class ImageViewerApp:
             callbacks = file_browser.FolderTreeCallbacks(
                 on_folder_selected=lambda p: self.load_folder(str(p)),
                 on_toggle_expand=self.toggle_folder_expand,
+                on_refresh_devices=self.update_device_list,
             )
 
             device_items = file_browser.build_device_items(context, callbacks)
@@ -637,6 +639,7 @@ class ImageViewerApp:
         callbacks = file_browser.FolderTreeCallbacks(
             on_folder_selected=lambda p: self.load_folder(str(p)),
             on_toggle_expand=self.toggle_folder_expand,
+            on_refresh_devices=self.update_device_list,
         )
         return file_browser.render_folder_with_children(
             context=context,

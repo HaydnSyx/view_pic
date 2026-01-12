@@ -29,6 +29,7 @@ class FolderTreeCallbacks:
 
     on_folder_selected: Callable[[Path], None]
     on_toggle_expand: Callable[[Path], None]
+    on_refresh_devices: Callable[[], None] | None = None  # 刷新设备列表回调
 
 
 def build_folder_tree(
@@ -77,12 +78,37 @@ def build_folder_tree(
 
     # 分组标题：移动设备
     controls.append(ft.Container(height=10))
+    
+    # 创建刷新按钮（如果提供了回调）
+    device_title_controls = [
+        ft.Text(
+            "移动设备", 
+            size=12, 
+            color="#666666", 
+            weight=ft.FontWeight.BOLD
+        )
+    ]
+    
+    # 如果提供了刷新回调，添加刷新按钮
+    if callbacks.on_refresh_devices is not None:
+        device_title_controls.extend([
+            ft.Container(expand=True),  # 占位，将按钮推到右侧
+            ft.IconButton(
+                icon=ft.icons.Icons.REFRESH,
+                icon_size=16,
+                tooltip="刷新设备列表",
+                on_click=lambda _: callbacks.on_refresh_devices(),
+                icon_color="#666666",
+            )
+        ])
+    
     controls.append(
         ft.Container(
-            content=ft.Text(
-                "移动设备", size=12, color="#666666", weight=ft.FontWeight.BOLD
+            content=ft.Row(
+                controls=device_title_controls,
+                spacing=5,
             ),
-            padding=10,
+            padding=ft.padding.only(left=10, right=5, top=10, bottom=10),
         )
     )
 
