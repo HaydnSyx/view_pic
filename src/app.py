@@ -134,6 +134,14 @@ class ImageViewerApp:
             on_click=self.toggle_view_mode,
         )
 
+        # 图片数量统计文本
+        self.image_count_text = ft.Text(
+            "",
+            size=14,
+            color="#666666",
+            weight=ft.FontWeight.W_400,
+        )
+
         toolbar = ft.Container(
             content=ft.Row(
                 [
@@ -143,6 +151,8 @@ class ImageViewerApp:
                         weight=ft.FontWeight.BOLD,
                         color="#333333",
                     ),
+                    ft.Container(width=10),  # 间距
+                    self.image_count_text,  # 图片数量
                     ft.Container(expand=True),
                     self.view_mode_btn,
                 ]
@@ -483,6 +493,8 @@ class ImageViewerApp:
             self.display_images()
             # 刷新文件夹树以更新选中状态
             self.build_folder_tree()
+            # 更新图片数量显示
+            self.update_image_count_display()
         except Exception as exc:  # 保底异常处理
             logger.exception("加载文件夹失败: {}", self.current_folder)
             self.page.snack_bar = ft.SnackBar(
@@ -531,6 +543,8 @@ class ImageViewerApp:
 
             # 重新渲染图片列表
             self.display_images()
+            # 更新图片数量显示
+            self.update_image_count_display()
 
         except Exception as exc:
             logger.exception("加载更多图片失败: {}", exc)
@@ -796,6 +810,28 @@ class ImageViewerApp:
         )
 
     # === 加载状态指示器 ===
+
+    def update_image_count_display(self) -> None:
+        """更新图片数量显示。
+        
+        根据懒加载状态显示不同格式：
+        - 如果 has_more_images=True：显示 "共{total_count}+张"
+        - 否则显示 "共{len(images)}张"
+        """
+        if not self.image_count_text:
+            return
+
+        if len(self.images) == 0:
+            self.image_count_text.value = ""
+        elif self.has_more_images:
+            # 还有更多图片未加载，显示 "+" 号
+            self.image_count_text.value = f"共 {len(self.images)}+ 张"
+        else:
+            # 已加载全部，显示真实数量
+            self.image_count_text.value = f"共 {len(self.images)} 张"
+
+        if self.image_count_text:
+            self.image_count_text.update()
 
     def show_loading_indicator(self, total: int) -> None:
         """显示加载指示器。
