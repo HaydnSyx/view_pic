@@ -94,7 +94,8 @@ def _build_grid_view(
     # 获取缓存实例
     cache = get_thumbnail_cache()
 
-    for idx, image_path in enumerate(images[:100]):  # 虚拟滚动：先只加载前100张
+    # 渲染所有图片（但仍使用缓存和异步加载优化性能）
+    for idx, image_path in enumerate(images):
         try:
             # 先从缓存中获取
             thumbnail = cache.get(image_path)
@@ -183,8 +184,8 @@ def build_grid_with_placeholders(
         run_spacing=15,
     )
 
-    # 创建占位符容器（最多100个）
-    for idx, image_path in enumerate(images[:100]):
+    # 创建占位符容器（渲染所有图片）
+    for idx, image_path in enumerate(images):
         placeholder_container = _create_thumbnail_placeholder(
             index=idx,
             image_path=image_path,
@@ -330,7 +331,8 @@ def _build_list_view(
 
     items: List[ft.Control] = []
 
-    for idx, image_path in enumerate(images[:100]):  # 虚拟滚动
+    # 渲染所有图片（列表视图）
+    for idx, image_path in enumerate(images):
         try:
             stat = image_path.stat()
             size_text = format_file_size(stat.st_size)

@@ -57,8 +57,21 @@ def show_preview(
     preview_dialog: ft.AlertDialog,
     page: ft.Page,
     on_thumbnail_click: Callable[[int], None],
+    loading_indicator: ft.Container | None = None,
 ) -> None:
-    """显示大图预览并更新缩略图轮播。"""
+    """显示大图预览并更新缩略图轮播。
+    
+    Args:
+        images: 图片列表
+        current_index: 当前索引
+        preview_image: 预览图片控件
+        position_indicator: 位置指示器
+        thumbnail_row: 缩略图行
+        preview_dialog: 预览对话框
+        page: 页面对象
+        on_thumbnail_click: 缩略图点击回调
+        loading_indicator: 加载指示器（可选）
+    """
 
     if not (0 <= current_index < len(images)):
         return
@@ -66,8 +79,19 @@ def show_preview(
     image_path = images[current_index]
 
     try:
+        # 显示loading指示器
+        if loading_indicator:
+            loading_indicator.visible = True
+            preview_image.visible = False  # 隐藏图片
+            page.update()
+        
         # 当前图片：优先从缓存获取
         preview_image.src = _get_image_data_uri(image_path)
+        
+        # 隐藏loading，显示图片
+        if loading_indicator:
+            loading_indicator.visible = False
+            preview_image.visible = True
 
         # 更新位置指示器
         assert isinstance(position_indicator.content, ft.Text)

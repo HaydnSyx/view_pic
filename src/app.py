@@ -55,6 +55,7 @@ class ImageViewerApp:
         self.thumbnail_row: ft.Row | None = None
         self.preview_dialog: ft.AlertDialog | None = None
         self.load_more_button: ft.Container | None = None  # "加载更多"按钮
+        self.preview_loading_indicator: ft.Container | None = None  # 大图预览loading指示器
 
     def main(self, page: ft.Page) -> None:
         """Flet 应用入口函数"""
@@ -253,6 +254,30 @@ class ImageViewerApp:
             alignment=ft.MainAxisAlignment.CENTER,
         )
 
+        # 大图预览加载指示器
+        self.preview_loading_indicator = ft.Container(
+            content=ft.Column(
+                [
+                    ft.ProgressRing(
+                        width=60,
+                        height=60,
+                        stroke_width=4,
+                        color="white",
+                    ),
+                    ft.Text(
+                        "加载中...",
+                        size=16,
+                        color="white",
+                        weight=ft.FontWeight.W_500,
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,  # 主轴居中对齐
+                spacing=15,
+            ),
+            visible=False,  # 默认隐藏
+        )
+
         self.preview_dialog = ft.AlertDialog(
             modal=True,
             content=ft.Container(
@@ -286,11 +311,26 @@ class ImageViewerApp:
                                         on_click=self.show_previous_image,
                                         icon_size=40,
                                     ),
-                                    # 图片容器
+                                    # 图片容器（使用Stack叠加loading指示器）
                                     ft.Container(
-                                        content=self.preview_image,
+                                        content=ft.Stack(
+                                            [
+                                                # 图片
+                                                ft.Container(
+                                                    content=self.preview_image,
+                                                    alignment=ft.Alignment(0, 0),
+                                                    expand=True,
+                                                ),
+                                                # Loading指示器（叠加在图片上面，居中显示）
+                                                ft.Container(
+                                                    content=self.preview_loading_indicator,
+                                                    alignment=ft.Alignment(0, 0),  # 水平垂直居中
+                                                    expand=True,
+                                                ),
+                                            ],
+                                        ),
                                         expand=True,
-                                        alignment=ft.Alignment(0, 0),
+                                        alignment=ft.Alignment(0, 0),  # 确保容器内容居中
                                     ),
                                     # 右侧按钮
                                     ft.IconButton(
@@ -739,8 +779,8 @@ class ImageViewerApp:
         if self.is_loading_thumbnails:
             self.async_thumbnail_service.cancel_current_task()
 
-        # 只加载前100张（与占位符数量一致）
-        images_to_display = self.images[:100]
+        # 加载所有图片（使用缓存和异步加载优化性能）
+        images_to_display = self.images
         
         # 检查缓存，分离已缓存和未缓存的图片
         cache = self.async_thumbnail_service.cache
@@ -1070,6 +1110,7 @@ class ImageViewerApp:
             preview_dialog=self.preview_dialog,
             page=self.page,
             on_thumbnail_click=lambda i: self.jump_to_image(i),
+            loading_indicator=self.preview_loading_indicator,  # 传入loading指示器
         )
 
         # 应用当前缩放级别
