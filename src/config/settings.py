@@ -22,8 +22,8 @@ GRID_THUMBNAIL_SIZE: int = 150
 # ==================== 性能优化配置 ====================
 
 # 文件扫描配置
-INITIAL_IMAGE_LOAD_LIMIT: int = 500  # 初次加载图片数量上限
-LOAD_MORE_BATCH_SIZE: int = 200  # "加载更多"每次追加数量
+INITIAL_IMAGE_LOAD_LIMIT: int = 100  # 初次加载图片数量上限
+LOAD_MORE_BATCH_SIZE: int = 50  # "加载更多"每次追加数量
 
 # 缩略图生成配置
 THUMBNAIL_WORKER_THREADS: int = 4  # 线程池大小（建议 2-8）
