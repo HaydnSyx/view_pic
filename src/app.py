@@ -372,6 +372,38 @@ class ImageViewerApp:
         )
 
         self.page.overlay.append(self.preview_dialog)
+        
+        # 主界面全局loading指示器（点击缩略图时显示）
+        self.main_loading_overlay = ft.Container(
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.ProgressRing(
+                            width=60,
+                            height=60,
+                            stroke_width=4,
+                            color="white",
+                        ),
+                        ft.Text(
+                            "加载中...",
+                            size=16,
+                            color="white",
+                            weight=ft.FontWeight.W_500,
+                        ),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=15,
+                ),
+                alignment=ft.Alignment(0, 0),
+                expand=True,
+            ),
+            bgcolor="#000000E6",  # 更深的半透明黑色背景 (90%不透明度)
+            visible=False,  # 默认隐藏
+            expand=True,
+        )
+        self.page.overlay.append(self.main_loading_overlay)
+        
         self.page.add(main_content)
 
     def apply_zoom(self) -> None:
@@ -1090,8 +1122,26 @@ class ImageViewerApp:
 
     def preview_image_at_index(self, index: int) -> None:
         """预览指定索引的图片"""
+        assert self.page is not None
+        assert self.main_loading_overlay is not None
+        
+        # 显示主界面loading
+        self.main_loading_overlay.visible = True
+        self.page.update()
+        
+        # 给浏览器一些时间渲染loading界面
+        import time
+        time.sleep(0.05)  # 50毫秒延迟,确保loading显示
+        
+        # 设置当前图片索引
         self.current_image_index = index
+        
+        # 显示预览（内部会显示预览对话框的loading）
         self.show_preview()
+        
+        # 隐藏主界面loading
+        self.main_loading_overlay.visible = False
+        self.page.update()
 
     def show_preview(self) -> None:
         """显示大图预览（委托给 core.preview）。"""
