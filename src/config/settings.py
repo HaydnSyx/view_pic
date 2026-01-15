@@ -34,3 +34,8 @@ THUMBNAIL_CACHE_SIZE: int = 200  # 缩略图缓存队列大小（FIFO）
 # 渲染配置
 ENABLE_PROGRESSIVE_RENDERING: bool = True  # 是否启用渐进式渲染
 SHOW_LOADING_INDICATOR: bool = True  # 是否显示加载指示器
+
+# 预览图片配置
+PREVIEW_USE_JPEG: bool = True  # 预览大图是否使用JPEG格式（更快，但质量略低）
+PREVIEW_JPEG_QUALITY: int = 85  # JPEG质量（1-100，仅当PREVIEW_USE_JPEG=True时有效）
+PREVIEW_MAX_SIZE: tuple[int, int] | None = (3840, 2160)  # 预览图片最大尺寸，超过会缩放，None表示不缩放

@@ -1121,27 +1121,21 @@ class ImageViewerApp:
     # === 预览与缩略图轮播 ===
 
     def preview_image_at_index(self, index: int) -> None:
-        """预览指定索引的图片"""
-        assert self.page is not None
-        assert self.main_loading_overlay is not None
-        
-        # 显示主界面loading
-        self.main_loading_overlay.visible = True
-        self.page.update()
-        
-        # 给浏览器一些时间渲染loading界面
-        import time
-        time.sleep(0.05)  # 50毫秒延迟,确保loading显示
+        """预览指定索引的图片（优化版：减少page.update调用）"""
+        import time as time_module
+        total_start = time_module.perf_counter()
         
         # 设置当前图片索引
         self.current_image_index = index
         
-        # 显示预览（内部会显示预览对话框的loading）
+        # 显示预览（内部只调用一次 page.update）
+        step_start = time_module.perf_counter()
         self.show_preview()
+        elapsed = (time_module.perf_counter() - step_start) * 1000
+        logger.debug("show_preview调用耗时: {:.2f}ms", elapsed)
         
-        # 隐藏主界面loading
-        self.main_loading_overlay.visible = False
-        self.page.update()
+        total_elapsed = (time_module.perf_counter() - total_start) * 1000
+        logger.info("preview_image_at_index 总耗时: {:.2f}ms", total_elapsed)
 
     def show_preview(self) -> None:
         """显示大图预览（委托给 core.preview）。"""

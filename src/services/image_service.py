@@ -1,5 +1,6 @@
 """图片相关服务：扫描、缩略图生成、原图加载等。"""
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -121,12 +122,49 @@ def list_images_in_folder_batch(
         )
 
 
-def _encode_image_to_data_uri(img: Image.Image) -> str:
-    """将 Pillow 图片对象编码为 data URI 字符串。"""
+def _encode_image_to_data_uri(img: Image.Image, use_jpeg: bool = False, quality: int = 85) -> str:
+    """将 Pillow 图片对象编码为 data URI 字符串。
+    
+    Args:
+        img: Pillow图片对象
+        use_jpeg: 是否使用JPEG格式（更快，但质量略低）
+        quality: JPEG质量（1-100，仅当use_jpeg=True时有效）
+    """
+    start_time = time.perf_counter()
+    
+    # 获取图片尺寸用于日志
+    img_size = f"{img.width}x{img.height}"
+    
+    step_start = time.perf_counter()
     buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
+    if use_jpeg and img.mode in ("RGB", "RGBA"):
+        # 如果是RGBA，需要转换为RGB
+        if img.mode == "RGBA":
+            rgb_img = Image.new("RGB", img.size, (255, 255, 255))
+            rgb_img.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
+            img = rgb_img
+        # 性能优化：移除 optimize=True，使用 4:2:0 子采样
+        # optimize=True 会做额外的优化pass，显著增加编码时间
+        img.save(buffer, format="JPEG", quality=quality, subsampling="4:2:0")
+        mime_type = "jpeg"
+    else:
+        # PNG 也移除 optimize，加快编码
+        img.save(buffer, format="PNG")
+        mime_type = "png"
+    save_elapsed = (time.perf_counter() - step_start) * 1000
+    
+    step_start = time.perf_counter()
     img_base64 = base64.b64encode(buffer.getvalue()).decode()
-    return f"data:image/png;base64,{img_base64}"
+    encode_elapsed = (time.perf_counter() - step_start) * 1000
+    
+    total_elapsed = (time.perf_counter() - start_time) * 1000
+    buffer_size_kb = len(buffer.getvalue()) / 1024
+    
+    if total_elapsed > 50:  # 只记录耗时超过50ms的编码操作
+        logger.info("编码图片为data URI: 尺寸={}, 格式={}, 大小={:.1f}KB, 总耗时: {:.2f}ms (保存: {:.2f}ms, base64编码: {:.2f}ms)", 
+                     img_size, mime_type.upper(), buffer_size_kb, total_elapsed, save_elapsed, encode_elapsed)
+    
+    return f"data:image/{mime_type};base64,{img_base64}"
 
 
 def create_thumbnail_data_uri(image_path: Path, size: int = 150) -> Optional[str]:
@@ -140,7 +178,37 @@ def create_thumbnail_data_uri(image_path: Path, size: int = 150) -> Optional[str
         return None
 
 
-def load_image_data_uri(image_path: Path) -> str:
-    """加载原图并转换为 data URI 字符串。"""
+def load_image_data_uri(image_path: Path, use_jpeg: bool = True, max_size: tuple[int, int] | None = None) -> str:
+    """加载原图并转换为 data URI 字符串。
+    
+    Args:
+        image_path: 图片路径
+        use_jpeg: 是否使用JPEG格式（更快，但质量略低），默认True
+        max_size: 最大尺寸元组(width, height)，如果图片超过此尺寸会缩放，默认None不缩放
+    """
+    total_start = time.perf_counter()
+    
+    step_start = time.perf_counter()
     img = Image.open(image_path)
-    return _encode_image_to_data_uri(img)
+    open_elapsed = (time.perf_counter() - step_start) * 1000
+    original_size = img.size
+    
+    # 如果指定了最大尺寸，进行缩放
+    if max_size:
+        step_start = time.perf_counter()
+        img.thumbnail(max_size, Image.Resampling.LANCZOS)
+        resize_elapsed = (time.perf_counter() - step_start) * 1000
+        logger.debug("缩放图片: {} {} -> {} 耗时: {:.2f}ms", 
+                    image_path.name, original_size, img.size, resize_elapsed)
+    
+    logger.debug("打开图片文件: {} 尺寸: {} 耗时: {:.2f}ms", 
+                image_path.name, img.size, open_elapsed)
+    
+    step_start = time.perf_counter()
+    data_uri = _encode_image_to_data_uri(img, use_jpeg=use_jpeg)
+    encode_elapsed = (time.perf_counter() - step_start) * 1000
+    
+    total_elapsed = (time.perf_counter() - total_start) * 1000
+    logger.info("加载图片data URI: {} 总耗时: {:.2f}ms (打开: {:.2f}ms, 编码: {:.2f}ms)", 
+                image_path.name, total_elapsed, open_elapsed, encode_elapsed)
+    return data_uri
