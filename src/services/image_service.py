@@ -143,9 +143,10 @@ def _encode_image_to_data_uri(img: Image.Image, use_jpeg: bool = False, quality:
             rgb_img = Image.new("RGB", img.size, (255, 255, 255))
             rgb_img.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
             img = rgb_img
-        # 性能优化：移除 optimize=True，使用 4:2:0 子采样
-        # optimize=True 会做额外的优化pass，显著增加编码时间
-        img.save(buffer, format="JPEG", quality=quality, subsampling="4:2:0")
+        # 性能优化：移除 optimize=True
+        # optimize=True 会做额外的优化pass来减小文件体积，但不影响图像质量
+        # quality 参数才是决定图像质量的关键
+        img.save(buffer, format="JPEG", quality=quality)
         mime_type = "jpeg"
     else:
         # PNG 也移除 optimize，加快编码
